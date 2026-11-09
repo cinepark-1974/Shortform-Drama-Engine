@@ -1,0 +1,172 @@
+{
+ "cuts": [
+  {
+   "no": 1,
+   "scene": 1,
+   "size": "MCU",
+   "angle": "정면",
+   "camera": "천천히 다가감",
+   "dur": 5.0,
+   "motion": "move",
+   "climax": false,
+   "chars": [
+    "세영"
+   ],
+   "loc": "L01",
+   "action": "세영이 QR 방문증을 게이트에 찍고, 벽의 대성그룹 CI를 올려다보며 입꼬리를 올린다.",
+   "dialogue": null,
+   "screen_text": "",
+   "sfx": "게이트 열림",
+   "action_en": "Seyoung taps her QR visitor pass on the gate and looks up at the company logo on the wall with a small confident smile."
+  },
+  {
+   "no": 2,
+   "scene": 1,
+   "size": "OTS",
+   "angle": "어깨 너머",
+   "camera": "고정",
+   "dur": 9.0,
+   "motion": "video",
+   "climax": false,
+   "chars": [
+    "세영:뒷모습",
+    "안내 직원"
+   ],
+   "loc": "L01",
+   "action": "안내 직원이 모니터를 보다가 마우스를 클릭하고 내선 전화를 든다.",
+   "dialogue": {
+    "who": "안내 직원",
+    "text": "한세영 님, 인사팀에서 직접 안내해 드린다고요. 여기서 잠깐만요.",
+    "on_screen": true
+   },
+   "screen_text": "",
+   "sfx": "",
+   "action_en": "The receptionist looks at her monitor, clicks the mouse and picks up the desk phone."
+  },
+  {
+   "no": 3,
+   "scene": 1,
+   "size": "WS",
+   "angle": "하이앵글",
+   "camera": "고정",
+   "dur": 6.0,
+   "motion": "move",
+   "climax": false,
+   "chars": [
+    "세영"
+   ],
+   "loc": "L01",
+   "action": "사원들이 사원증을 찍고 게이트를 지나가고, 세영 혼자 게이트 앞에 서 있다.",
+   "dialogue": null,
+   "screen_text": "",
+   "sfx": "게이트 삑",
+   "action_en": "Employees badge through the gates one after another while Seyoung stands alone in front of the gate."
+  },
+  {
+   "no": 4,
+   "scene": 2,
+   "size": "2-SHOT",
+   "angle": "측면",
+   "camera": "고정",
+   "dur": 9.0,
+   "motion": "video",
+   "climax": false,
+   "chars": [
+    "세영",
+    "인사팀 직원"
+   ],
+   "loc": "L02",
+   "action": "인사팀 직원이 테이블 건너편에서 세영에게 채용 취소를 말하고, 세영이 굳는다.",
+   "dialogue": {
+    "who": "인사팀 직원",
+    "text": "오늘 자로 인턴 채용이 취소됐습니다.",
+    "on_screen": true
+   },
+   "screen_text": "",
+   "sfx": "",
+   "action_en": "Across a small meeting table, the HR staff member tells Seyoung the internship is cancelled and Seyoung freezes."
+  },
+  {
+   "no": 5,
+   "scene": 2,
+   "size": "INSERT",
+   "angle": "정면",
+   "camera": "줌인",
+   "dur": 5.0,
+   "motion": "video",
+   "climax": true,
+   "chars": [],
+   "loc": "L02",
+   "action": "노트북 화면에 인사 시스템이 떠 있고, 한세영 이름 옆에 빨간 태그가 붙어 있다.",
+   "dialogue": null,
+   "screen_text": "한세영  [채용 제한 — 본사 지정]",
+   "sfx": "저음 쿵",
+   "action_en": "A laptop screen shows an HR system page with a red tag next to one name."
+  },
+  {
+   "no": 6,
+   "scene": 2,
+   "size": "CU",
+   "angle": "3/4 측면",
+   "camera": "천천히 다가감",
+   "dur": 7.0,
+   "motion": "move",
+   "climax": false,
+   "chars": [
+    "세영"
+   ],
+   "loc": "L02",
+   "action": "세영이 노트북 가방 끈을 쥔 채 의자에서 일어서지 못하고 화면을 본다.",
+   "dialogue": {
+    "who": "세영",
+    "text": "누가 이걸— 누가 올린 건데요.",
+    "on_screen": true
+   },
+   "screen_text": "",
+   "sfx": "",
+   "action_en": "Seyoung grips her laptop bag strap, stays seated and stares at the screen."
+  },
+  {
+   "no": 7,
+   "scene": 3,
+   "size": "MS",
+   "angle": "뒤에서",
+   "camera": "핸드헬드",
+   "dur": 8.0,
+   "motion": "move",
+   "climax": false,
+   "chars": [
+    "세영:뒷모습"
+   ],
+   "loc": "L01",
+   "action": "세영이 고개를 숙이고 게이트를 나서고, 뒤로 신입 사원 두 명이 웃으며 지나간다.",
+   "dialogue": {
+    "who": "신입A",
+    "text": "야, 오늘 마케팅팀 인턴 온다며? 자리 비워놨는데.",
+    "on_screen": false
+   },
+   "screen_text": "",
+   "sfx": "웃음소리",
+   "action_en": "Seyoung walks out through the gate with her head down while two new employees pass behind her laughing."
+  },
+  {
+   "no": 8,
+   "scene": 3,
+   "size": "CU",
+   "angle": "정면",
+   "camera": "천천히 다가감",
+   "dur": 6.0,
+   "motion": "video",
+   "climax": true,
+   "chars": [
+    "세영"
+   ],
+   "loc": "L01",
+   "action": "세영이 울리는 핸드폰을 꺼내 화면을 보고, 엄지가 화면 위에서 멈춘다.",
+   "dialogue": null,
+   "screen_text": "발신: 오진혁",
+   "sfx": "진동",
+   "action_en": "Seyoung takes out her ringing phone, looks at the screen and her thumb stops above it."
+  }
+ ]
+}
