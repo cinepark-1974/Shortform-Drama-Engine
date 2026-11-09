@@ -22,50 +22,55 @@ from src.store import Store, secrets_dict
 VERSION = "v0.2"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
-# ───────── 블루진 엔진 공통 화면 규칙 (Paperlogy · Yale Blue 구조 · Goldenrod 숫자 · 그림자/그라데이션 없음) ─────────
+# ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
 st.markdown("""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/fonts-archive/Paperlogy/subsets/Paperlogy-dynamic-subset.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&display=swap">
 <style>
-:root{--yale:#0F3B59;--glacier:#F7FBFC;--gold:#DBA12C;--line:#C8D6DD;--ink:#142C3C;--paper:#F5F3EF;--muted:#5B6B76;
---todo:#B7791F;--todo-bg:#FFF8E8;--fix:#A0302A;--fix-bg:#FDECEC;--ok-bg:#E8F1F6}
+:root{--navy:#191970;--y:#FFCB05;--bg:#F4F8FD;--card:#FFFFFF;--line:#D6E2EA;--ink:#1A1F3A;--muted:#5F6B85;
+--blue:#3B6FD8;--ok-bg:#E8EEFA;--warn-bg:#FFF6CC;--fix:#C62828;--fix-bg:#FDECEC}
 html,body,[class*="css"],.stApp,button,input,textarea{font-family:"Paperlogy",-apple-system,"Apple SD Gothic Neo",sans-serif!important}
-.stApp{background:var(--paper)!important;color:var(--ink)}
-h1,h2,h3,h4{color:var(--yale)!important}
-.stButton>button{border:1px solid var(--line)!important;border-radius:8px!important;font-weight:700!important;box-shadow:none!important}
-.stButton>button:hover{border-color:var(--yale)!important;color:var(--yale)!important}
-.stButton>button[kind="primary"]{background:var(--yale)!important;color:#fff!important;border-color:var(--yale)!important}
+.stApp{background:var(--bg)!important;color:var(--ink)}
+[data-testid="stSidebar"]{background:var(--card)!important;border-right:1px solid var(--line)}
+[data-testid="stHeader"]{background:transparent!important}
+h1,h2,h3,h4{color:var(--navy)!important}
+.stButton>button,.stDownloadButton>button{border:1px solid var(--line)!important;border-radius:8px!important;font-weight:700!important;box-shadow:none!important;background:var(--card)!important;color:var(--navy)!important}
+.stButton>button:hover,.stDownloadButton>button:hover{border-color:var(--navy)!important}
+.stButton>button[kind="primary"]{background:var(--y)!important;color:var(--navy)!important;border-color:var(--y)!important}
 .stButton>button:disabled{opacity:.4!important}
-[data-testid="stExpander"]{background:#fff;border:.5px solid var(--line)!important;border-radius:12px!important}
-.brand{background:var(--yale);border-bottom:3px solid var(--gold);color:#fff;padding:16px 22px;border-radius:12px;margin-bottom:10px}
-.brand .co{font-size:11px;font-weight:700;letter-spacing:.2em;opacity:.75}
-.brand .ti{font-size:22px;font-weight:900;margin-top:2px}
-.brand .ver{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--gold);margin-left:8px;font-weight:700}
-.brand .m{float:right;text-align:right;font-size:12px;opacity:.9;line-height:1.6}.brand .m b{color:var(--gold)}
-.pipe{display:flex;gap:4px;overflow-x:auto;background:#fff;border:.5px solid var(--line);border-radius:12px;padding:8px;margin-bottom:10px}
-.ps{flex:1 0 92px;padding:6px 8px;border-radius:9px}
+[data-testid="stExpander"]{background:var(--card);border:1px solid var(--line)!important;border-radius:12px!important}
+.stTabs [aria-selected="true"]{color:var(--navy)!important}
+.stTabs [data-baseweb="tab-highlight"]{background:var(--y)!important}
+.brand{background:var(--card);border:1px solid var(--line);border-bottom:4px solid var(--y);padding:16px 22px;border-radius:12px;margin-bottom:10px}
+.brand .co{font-size:11px;font-weight:700;letter-spacing:.2em;color:var(--muted)}
+.brand .ti{font-size:22px;font-weight:900;margin-top:2px;color:var(--navy)}
+.brand .ver{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--navy);background:var(--y);padding:1px 6px;border-radius:4px;margin-left:8px;font-weight:700}
+.brand .m{float:right;text-align:right;font-size:12px;color:var(--muted);line-height:1.6}.brand .m b{color:var(--navy)}
+.pipe{display:flex;gap:4px;overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px;margin-bottom:10px}
+.ps{flex:1 0 92px;padding:6px 8px;border-radius:9px;color:var(--navy)}
 .ps .n{font-size:10px;color:var(--muted);letter-spacing:.1em;font-family:"JetBrains Mono",monospace}.ps .t{font-size:13px;font-weight:800;white-space:nowrap}
 .ps .c{font-size:11px;color:var(--muted);white-space:nowrap}
-.ps .b{height:3px;background:var(--line);border-radius:2px;margin-top:4px;overflow:hidden}.ps .b i{display:block;height:100%;background:var(--yale)}
-.ps.on{background:var(--yale);color:#fff}.ps.on .n,.ps.on .c{color:rgba(255,255,255,.85)}.ps.on .b i{background:var(--gold)}
+.ps .b{height:3px;background:var(--line);border-radius:2px;margin-top:4px;overflow:hidden}.ps .b i{display:block;height:100%;background:var(--blue)}
+.ps.on{background:var(--navy);color:#fff}.ps.on .n,.ps.on .c{color:rgba(255,255,255,.85)}.ps.on .b i{background:var(--y)}
 .ps.lock{opacity:.4}
-.brief{background:#fff;border:.5px solid var(--line);border-radius:14px;padding:12px 16px;margin-bottom:12px}
-.brief .now{font-size:16px;font-weight:800}.brief .now em{font-style:normal;color:var(--gold)}
-.brief .how{font-size:12.5px;color:var(--muted);margin-top:2px}
+.brief{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--navy);border-radius:12px;padding:12px 16px;margin-bottom:12px}
+.brief .now{font-size:16px;font-weight:800;color:var(--navy)}.brief .now em{font-style:normal;background:var(--y);color:var(--navy);padding:0 6px;border-radius:4px}
+.brief .how{font-size:12.5px;color:var(--muted);margin-top:4px}
 .grid{display:grid;grid-template-columns:repeat(20,1fr);gap:4px}
-.cell{font-size:11px;font-weight:700;text-align:center;padding:6px 0;border-radius:6px;border:.5px solid var(--line);background:#fff;color:var(--muted);font-family:"JetBrains Mono",monospace}
-.cell.done{background:var(--yale);color:#fff}.cell.doing{background:var(--ok-bg);color:var(--yale);border-color:var(--yale)}
+.cell{font-size:11px;font-weight:700;text-align:center;padding:6px 0;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--muted);font-family:"JetBrains Mono",monospace}
+.cell.done{background:var(--navy);color:#fff;border-color:var(--navy)}.cell.doing{background:var(--ok-bg);color:var(--navy);border-color:var(--blue)}
 .cell.fix{background:var(--fix-bg);color:var(--fix);border-color:var(--fix)}
 .tag{display:inline-block;font-size:11px;font-weight:800;padding:1px 8px;border-radius:99px;margin-right:4px}
-.tag.ok{background:var(--ok-bg);color:var(--yale)}.tag.todo{background:var(--todo-bg);color:var(--todo)}.tag.fix{background:var(--fix-bg);color:var(--fix)}
-.tag.mv{background:var(--yale);color:#fff}
-.hook{font-weight:800;color:var(--fix)}.dlg b{color:var(--yale)}
+.tag.ok{background:var(--ok-bg);color:var(--navy)}.tag.todo{background:var(--warn-bg);color:var(--navy)}.tag.fix{background:var(--fix-bg);color:var(--fix)}
+.tag.mv{background:var(--navy);color:#fff}
+.hook{font-weight:800;color:var(--fix)}.dlg b{color:var(--navy)}
 .small{font-size:12px;color:var(--muted)}
-.issue{background:#fff;border:.5px solid var(--line);border-left:3px solid var(--gold);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:13px}
-.cut{background:#fff;border:.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:6px}
-.cut .h{font-size:13px;font-weight:800}.cut .h .d{color:var(--gold);font-family:"JetBrains Mono",monospace;margin-left:6px}
+.issue{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--y);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:13px}
+.issue b{color:var(--navy)}
+.cut{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:6px}
+.cut .h{font-size:13px;font-weight:800;color:var(--navy)}.cut .h .d{color:var(--blue);font-family:"JetBrains Mono",monospace;margin-left:6px}
 .cut .a{font-size:13.5px;margin-top:3px}.cut .s{font-size:12px;color:var(--muted);margin-top:2px}
-.rt{height:10px;border-radius:5px;background:var(--glacier);border:.5px solid var(--line);overflow:hidden;display:flex;margin:4px 0 10px}
+.rt{height:10px;border-radius:5px;background:var(--bg);border:1px solid var(--line);overflow:hidden;display:flex;margin:4px 0 10px}
 .rt i{display:block;height:100%;border-right:1px solid #fff}
 </style>""", unsafe_allow_html=True)
 
@@ -506,9 +511,9 @@ elif cur == "cut":
     else:
         cuts = rec["cuts"]
         total = sum(c["dur"] for c in cuts)
-        color = {"still": "#C8D6DD", "move": "#5B8BA8", "video": "#0F3B59"}
+        color = {"still": "#D6E2EA", "move": "#7FA2E6", "video": "#191970"}
         bar = "".join(f'<i title="{c["id"]} {c["dur"]}초" style="width:{100 * c["dur"] / max(total, 1):.1f}%;background:{color[c["motion"]]}"></i>' for c in cuts)
-        st.markdown(f"<span class='small'>러닝타임</span> <b style='color:var(--gold)'>{total:.1f}초</b> · 컷 {len(cuts)}개 · "
+        st.markdown(f"<span class='small'>러닝타임</span> <b style='color:var(--navy)'>{total:.1f}초</b> · 컷 {len(cuts)}개 · "
                     f"<span class='small'>연회색 정지 · 파랑 짧은 움직임 · 남색 완전 영상</span><div class='rt'>{bar}</div>", unsafe_allow_html=True)
         iss = cutter.check(cuts, known_c, known_l)
         if iss:
