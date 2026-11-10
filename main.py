@@ -475,7 +475,7 @@ elif cur == "cast":
         bad = imagegen.banned_in(prompt)
         if bad:
             st.markdown(f'<span class="tag fix">금지어</span> {" · ".join(bad)}', unsafe_allow_html=True)
-        if prompt != info.get("prompt_en", ""):
+        if prompt != info.get("prompt_en", "") and prompt.strip():
             info["prompt_en"] = prompt
             save(work)
         c1, c2 = st.columns([1, 2])
@@ -530,9 +530,13 @@ elif cur == "cast":
         if need and st.button(f"프로필 초안 만들기 ({len(need)}명, Claude)", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
             with st.spinner("대본에서 나이·직업·처지를 읽는 중…"):
                 d = profiles.draft(KEYS["ANTHROPIC_API_KEY"], parsed, need, {}, MODEL, B)
+            alias = {a.replace(" ", ""): r["name"] for r in B["characters"] for a in [r["name"]] + r.get("aliases", [])}
             for c in d.get("characters", []):
-                if c.get("name") in chars:
-                    work.setdefault("cast", {}).setdefault(c["name"], {}).update(c)
+                nm = alias.get(str(c.get("name", "")).replace(" ", ""), c.get("name"))   # '세영' → '한세영'
+                if nm in chars:
+                    c["name"] = nm
+                    work.setdefault("cast", {}).setdefault(nm, {}).update(c)
+                    st.session_state.pop(f"p_cast_{nm}", None)   # 비어 있던 입력칸 기억을 지워야 새 지시문이 보임
             save(work)
             st.rerun()
         roles = {c["name"]: c for c in B["characters"]}
@@ -559,6 +563,7 @@ elif cur == "cast":
             for l in d.get("locations", []):
                 if l.get("name") in byname:
                     work.setdefault("loc", {}).setdefault(byname[l["name"]], {}).update(l)
+                    st.session_state.pop(f"p_loc_{byname[l['name']]}", None)
             save(work)
             st.rerun()
         st.caption("장소마다 넓은 마스터 1장을 확정합니다. 같은 장소의 모든 컷은 이 마스터에서 만듭니다.")
