@@ -72,6 +72,23 @@ h1,h2,h3,h4{color:var(--navy)!important}
 .cut .a{font-size:13.5px;margin-top:3px}.cut .s{font-size:12px;color:var(--muted);margin-top:2px}
 .rt{height:10px;border-radius:5px;background:var(--bg);border:1px solid var(--line);overflow:hidden;display:flex;margin:4px 0 10px}
 .rt i{display:block;height:100%;border-right:1px solid #fff}
+.ov{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+.ov .top{display:flex;gap:18px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px}
+.ov .big{font-size:40px;font-weight:900;color:var(--navy);line-height:1;font-family:"JetBrains Mono",monospace}
+.ov .big small{font-size:16px}
+.ov .bar{flex:1 1 220px;min-width:200px}
+.ov .bar .tr{height:12px;border-radius:6px;background:var(--bg);border:1px solid var(--line);overflow:hidden}
+.ov .bar .tr i{display:block;height:100%;background:linear-gradient(90deg,var(--navy),#3B4BC8)}
+.ov .bar .lb{font-size:11px;color:var(--muted);margin-bottom:3px}
+.ov .kpi{min-width:92px}.ov .kpi .v{font-size:20px;font-weight:900;color:var(--navy);font-family:"JetBrains Mono",monospace}
+.ov .kpi .k{font-size:11px;color:var(--muted)}
+.ov .next{font-size:13px;color:var(--navy);margin:2px 0 8px}.ov .next em{font-style:normal;background:var(--y);padding:0 6px;border-radius:4px;font-weight:800}
+.hm{display:grid;grid-template-columns:repeat(20,1fr);gap:3px}
+.hm div{font-size:10px;font-weight:700;text-align:center;padding:4px 0;border-radius:4px;border:1px solid var(--line);color:var(--muted);font-family:"JetBrains Mono",monospace}
+.hm div.g{border-left:3px solid var(--y)}
+.hm div.fx{outline:2px solid var(--fix);outline-offset:-2px}
+.lg{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:6px}
+.lg span i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:4px;vertical-align:-1px;border:1px solid var(--line)}
 </style>""", unsafe_allow_html=True)
 
 KEYS = secrets_dict()
@@ -152,6 +169,90 @@ def stage_counts(work: dict | None) -> dict:
     for k in ("cut", "still", "clip", "dub", "sub", "edit", "master"):
         out[k] = (sum(1 for e in eps.values() if e.get(k) == "done"), n_ep)
     return out
+
+
+EP_STAGES = ["cut", "still", "clip", "dub", "sub", "edit", "master"]
+EP_W = {"cut": 5, "still": 20, "clip": 30, "dub": 10, "sub": 10, "edit": 15, "master": 10}   # 한 화 안에서 작업량 비중(%)
+BINGE = 7                                                                                      # 몰아보기 한 편 = 7화
+
+
+def ep_level(s: dict) -> int:
+    """한 화가 앞에서부터 몇 단계까지 끝났는지 (0~7)."""
+    n = 0
+    for k in EP_STAGES:
+        if s.get(k) != "done":
+            break
+        n += 1
+    return n
+
+
+def shade(level: int) -> tuple[str, str]:
+    if level == 0:
+        return "#FFFFFF", "var(--muted)"
+    if level == 7:
+        return "#191970", "#FFCB05"
+    a = 0.08 + 0.14 * level
+    return f"rgba(25,25,112,{a:.2f})", ("#fff" if level >= 4 else "#191970")
+
+
+def progress(work: dict) -> dict:
+    """작품 전체 진행률. 준비(대본 3 + 캐스팅 7) 10%, 회차 제작 90%."""
+    n_ep = work["summary"]["episodes"]
+    cnt = stage_counts(work)
+    eps = work.get("eps", {})
+    a, b = cnt["cast"]
+    setup = 3 * cnt["script"][0] + (7 * a / b if b else 0)
+    ep_pts = sum(EP_W[k] for s in eps.values() for k in EP_STAGES if s.get(k) == "done")
+    pct = setup + 90 * ep_pts / (100 * n_ep) if n_ep else setup
+    levels = [ep_level(eps.get(str(i), {})) for i in range(1, n_ep + 1)]
+    done = sum(1 for l in levels if l == 7)
+    streak = next((i for i, l in enumerate(levels) if l < 7), n_ep)       # EP1부터 끊김 없이 완성된 화 수
+    binge_total = -(-n_ep // BINGE)
+    binge_ready = sum(1 for g in range(binge_total) if all(l == 7 for l in levels[g * BINGE:(g + 1) * BINGE]))
+    if not work.get("bible"):
+        nxt = "01 대본에서 작품 정리"
+    elif b and a < b:
+        nxt = f"02 캐스팅 ({a}/{b} 확정)"
+    elif streak < n_ep:
+        k = EP_STAGES[levels[streak]]
+        nxt = f"EP {streak + 1} · " + next(f"{n} {t}" for kk, n, t, d in STAGES if kk == k)
+    else:
+        nxt = "전 화 완성"
+    return {"pct": min(pct, 100), "levels": levels, "done": done, "streak": streak, "n": n_ep,
+            "binge": (binge_ready, binge_total), "next": nxt}
+
+
+def heatmap(work: dict, levels: list[int], big: bool = False) -> str:
+    eps = work.get("eps", {})
+    hooks = {e["ep"]: e["hook"] for e in work["parsed"]["episodes"]}
+    names = ["대기"] + [next(t for kk, n, t, d in STAGES if kk == k) + " 완료" for k in EP_STAGES]
+    cells = ""
+    for i, lv in enumerate(levels, start=1):
+        bg, fg = shade(lv)
+        cls = ("g " if (i - 1) % BINGE == 0 else "") + ("fx" if eps.get(str(i), {}).get("cut") == "fix" else "")
+        pad = "padding:7px 0;font-size:11px;" if big else ""
+        cells += (f'<div class="{cls}" style="{pad}background:{bg};color:{fg}" '
+                  f'title="EP {i} · {names[lv]} · {hooks.get(i, "")}">{i}</div>')
+    lg = "".join(f'<span><i style="background:{shade(l)[0]}"></i>{names[l]}</span>' for l in range(8))
+    return (f'<div class="hm">{cells}</div><div class="lg">{lg}'
+            f'<span><i style="border-left:3px solid #FFCB05"></i>몰아보기 7화 묶음 시작</span>'
+            f'<span><i style="outline:2px solid #C0392B;outline-offset:-2px"></i>고칠 컷 있음</span></div>')
+
+
+def overview(work: dict):
+    p = progress(work)
+    bd, bt = p["binge"]
+    kpi = lambda v, k: f'<div class="kpi"><div class="v">{v}</div><div class="k">{k}</div></div>'
+    html = (f'<div class="ov"><div class="top">'
+            f'<div><div class="big">{p["pct"]:.1f}<small>%</small></div><div class="small">작품 전체 진행률</div></div>'
+            f'<div class="bar"><div class="lb">준비(대본·캐스팅) 10% + 회차 제작 90%</div>'
+            f'<div class="tr"><i style="width:{p["pct"]:.1f}%"></i></div></div>'
+            + kpi(f'{p["done"]}/{p["n"]}', "완성한 화")
+            + kpi(f'{p["streak"]}일', f'업로드 비축 (EP1~{p["streak"]})')
+            + kpi(f'{bd}/{bt}', "몰아보기 준비")
+            + f'</div><div class="next">지금 할 일 <em>{p["next"]}</em></div>'
+            + heatmap(work, p["levels"]) + '</div>')
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def locked(work, k) -> bool:
@@ -250,6 +351,7 @@ if not work:
 
 # ───────── 작품 화면 ─────────
 header(work)
+overview(work)
 stage = st.radio("단계", [f"{n} {t}" for k, n, t, d in STAGES], horizontal=True, label_visibility="collapsed", key="stage_pick")
 cur = next(k for k, n, t, d in STAGES if stage.startswith(n))
 pipe(work, cur)
@@ -308,14 +410,15 @@ if cur == "script":
                               for l in sorted(B["locations"], key=lambda l: -stt["loc"].get(l["id"], 0))], hide_index=True, use_container_width=True)
 
     with t_board:
-        eps = work.get("eps", {})
-        cells = ""
-        for e in parsed["episodes"]:
-            s = eps.get(str(e["ep"]), {})
-            cls = "done" if s.get("master") == "done" else ("fix" if s.get("cut") == "fix" else ("doing" if s else ""))
-            cells += f'<div class="cell {cls}" title="{e["hook"]}">{e["ep"]}</div>'
-        st.markdown(f'<div class="grid">{cells}</div>', unsafe_allow_html=True)
-        st.caption("남색: 업로드 완료 · 하늘색: 제작 중 · 빨강: 고칠 컷 있음 · 흰색: 대기. 칸에 마우스를 올리면 훅 자막이 보입니다.")
+        p = progress(work)
+        st.markdown(heatmap(work, p["levels"], big=True), unsafe_allow_html=True)
+        st.caption("칸 색이 진할수록 많이 진행된 화입니다. 남색에 노란 숫자는 완성(마스터)된 화. 칸에 마우스를 올리면 단계와 훅 자막이 보입니다.")
+        rows = []
+        for k in EP_STAGES:
+            a, b = stage_counts(work)[k]
+            rows.append({"단계": next(f"{n} {t}" for kk, n, t, d in STAGES if kk == k), "끝난 화": a, "전체": b,
+                         "진행률": f"{100 * a / b:.0f}%" if b else "0%", "한 화 안 비중": f"{EP_W[k]}%"})
+        st.dataframe(rows, hide_index=True, use_container_width=True)
 
     with t_read:
         n = st.number_input("화", 1, len(parsed["episodes"]), 1, key="read_ep")
