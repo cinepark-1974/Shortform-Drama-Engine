@@ -13,6 +13,7 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 SIZES = ["ECU", "CU", "MCU", "MS", "MLS", "WS", "INSERT", "2-SHOT", "OTS"]
 ANGLES = ["정면", "3/4 측면", "측면", "뒤에서", "어깨 너머", "하이앵글", "로우앵글", "부감", "POV"]
 MOTIONS = {"still": "정지+카메라", "move": "짧은 움직임", "video": "완전 영상"}
+MAX_VIDEO = 4          # 한 화 완전 영상 컷 상한 (마지막 컷·클라이맥스 포함)
 
 SHOT_KO = {"ECU": "익스트림 클로즈업. 피사체의 한 부분이 화면을 꽉 채운다.", "CU": "클로즈업. 얼굴과 어깨 위가 화면을 꽉 채운다.",
            "MCU": "미디엄 클로즈업. 가슴 위 상반신이 화면을 채운다.", "MS": "미디엄 샷. 허리 위 상반신과 주변 공간 일부가 보인다.",
@@ -33,9 +34,13 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 규칙
 - 컷 6~8개. 컷 길이 합계 50~70초(목표 56초). 컷 하나 3~10초. 합계가 50초 미만이면 컷을 늘리지 말고 각 컷 dur 를 늘림.
 - 대사 컷의 dur 는 (대사 음절 수 ÷ 4) + 1초 이상.
+- 대본의 모든 S#(장면)은 최소 1컷씩 들어감. 장면을 건너뛰지 않음. scene 에는 그 컷이 속한 S# 번호를 정확히 씀.
+  장면이 많아 8컷을 넘길 것 같으면 짧은 장면을 컷 하나로 압축함.
 - 1번 컷은 첫 3초 안에 화의 훅을 보여 주는 컷. 마지막 컷은 대본의 '끊긴다' 순간이며 motion 은 반드시 "video".
 - 감정이 터지는 클라이맥스 컷은 climax true, motion "video".
 - motion: "still"(정지 그림+카메라 움직임), "move"(짧은 움직임: 눈 깜빡임·고개 돌림·손 움직임), "video"(완전 영상).
+  "video" 는 한 화에 최대 4개(마지막 컷·클라이맥스 포함). 완전 영상은 비용과 실패가 커서 꼭 필요한 컷에만 씀.
+  대사 컷은 대부분 "move" 로 충분함(입 움직임은 짧은 움직임으로 만듦).
   "still" 은 한 화에 연속 2개를 넘지 않음. 대사하는 얼굴이 보이는 컷은 "move" 또는 "video".
 - size: ECU, CU, MCU, MS, MLS, WS, INSERT, 2-SHOT, OTS 중 하나. 세로 화면이라 WS 는 화당 1개 이하.
 - angle: 정면, 3/4 측면, 측면, 뒤에서, 어깨 너머, 하이앵글, 로우앵글, 부감, POV 중 하나.
@@ -142,10 +147,25 @@ def normalize(cuts: list, ep: dict, bible: dict | None = None) -> list:
             "action_en": str(c.get("action_en", "")).strip(), "dialogue": d,
             "screen_text": str(c.get("screen_text") or ""), "sfx": str(c.get("sfx") or ""),
         })
-    return fit_durations(out)
+    return fit_durations(cap_video(out))
 
 
-def check(cuts: list, known_chars: set, known_locs: set) -> list[dict]:
+def cap_video(cuts: list, limit: int = MAX_VIDEO) -> list:
+    """완전 영상 컷이 상한을 넘으면, 마지막 컷·클라이맥스가 아닌 것부터 '짧은 움직임'으로 낮춘다 (긴 컷부터)."""
+    if cuts:
+        cuts[-1]["motion"] = "video"
+    for c in cuts:
+        if c["climax"]:
+            c["motion"] = "video"
+    vids = [c for c in cuts if c["motion"] == "video"]
+    if len(vids) > limit:
+        spare = sorted((c for c in vids if not c["climax"] and c is not cuts[-1]), key=lambda c: -c["dur"])
+        for c in spare[: len(vids) - limit]:
+            c["motion"] = "move"
+    return cuts
+
+
+def check(cuts: list, known_chars: set, known_locs: set, scenes: list | None = None) -> list[dict]:
     """컷 목록 점검 → [{'id','level':'fix'|'todo','msg'}]"""
     from src.imagegen import banned_in
     issues = []
@@ -156,6 +176,13 @@ def check(cuts: list, known_chars: set, known_locs: set) -> list[dict]:
         issues.append({"id": "-", "level": "todo", "msg": f"컷 {len(cuts)}개 (기준 6~8개)"})
     if not (50 <= total <= 70):
         issues.append({"id": "-", "level": "todo", "msg": f"합계 {total:.1f}초 (기준 50~70초)"})
+    if scenes:
+        miss = [n for n in scenes if n not in {c["scene"] for c in cuts}]
+        if miss:
+            issues.append({"id": "-", "level": "fix", "msg": "컷이 없는 장면: " + ", ".join(f"S#{n}" for n in miss)})
+    nv = sum(1 for c in cuts if c["motion"] == "video")
+    if nv > MAX_VIDEO:
+        issues.append({"id": "-", "level": "todo", "msg": f"완전 영상 컷 {nv}개 (상한 {MAX_VIDEO}개, 비용·실패 위험)"})
     if cuts[-1]["motion"] != "video":
         issues.append({"id": cuts[-1]["id"], "level": "fix", "msg": "마지막 '끊김' 컷은 완전 영상이어야 함"})
     run = 0
@@ -185,20 +212,26 @@ def check(cuts: list, known_chars: set, known_locs: set) -> list[dict]:
     return issues
 
 
-def still_prompt(c: dict, cast: dict, locs: dict) -> str:
-    """스틸(컷 그림) 지시문: 영어, 확정형. cast[name]=외모 영어 묘사, locs[id]=(이름, 영어 묘사)."""
+def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None) -> str:
+    """스틸(컷 그림) 지시문: 영어, 확정형. cast[name]=외모 영어 묘사, locs[id]=(이름, 영어 묘사).
+    refs = 함께 넣는 기준 그림 순서 (인물 이름 또는 장소 id). 지시문에서 '기준 그림 몇 번'으로 짚어 준다."""
+    refs = refs or []
+    pos = {r: i for i, r in enumerate(refs, start=1)}
     who = []
     for ch in c["chars"]:
         base, _, part = ch.partition(":")
         desc = cast.get(base, base)
-        who.append(f"{desc}, only the hands visible" if part == "손" else f"{desc}, seen from behind" if part == "뒷모습" else desc)
+        tag = f"the person in reference image {pos[base]}, same face, hair and outfit" if base in pos else desc
+        who.append(f"{tag}, only the hands visible" if part == "손" else f"{tag}, seen from behind" if part == "뒷모습" else tag)
     loc = locs.get(c["loc"], ("", ""))
     tight = c["size"] in ("ECU", "CU", "INSERT")
+    place = (f"the same room as reference image {pos[c['loc']]}, " if c["loc"] in pos else "") + (loc[1] or loc[0])
     lines = [f"Vertical 9:16 still frame from a Korean drama. {SHOT_EN.get(c['size'], 'medium shot').capitalize()}, {ANG_EN.get(c['angle'], 'eye level')}.",
              f"Scene: {c.get('action_en') or c['action']}",
              ("Characters: " + "; ".join(who) + ".") if who else "No people in frame.",
-             f"Location: {loc[1] or loc[0]}" + (", background softly blurred." if tight else "."),
-             "Same faces, outfits and room as the attached reference images." if (who or loc[0]) else "",
+             f"Location: {place}" + (", background softly blurred." if tight else "."),
+             ("Reference images are identity and set references only: keep faces, outfits and the room exactly, "
+              "and take pose, framing and expression from this description.") if refs else "",
              f"Any screen or paper in frame is blank; text is added in editing." if c["screen_text"] else "No text anywhere in the image."]
     return " ".join(x for x in lines if x)
 

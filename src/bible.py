@@ -21,10 +21,13 @@ AI 영상 제작에 들어가기 전에 대본 전체의 인물·장소를 통�
 2. speaker_map.global: 대본 표기 → 통일 이름. speaker_map.by_ep: '남자'·'팀장'처럼 화마다 다른 사람인 표기를 화 번호별로.
 3. locations: 제작 세트 목록. 같은 공간은 하나로(로비 / 1층 로비 / 로비 엘리베이터 앞 → 하나). 회사 이름이 바뀌어도
    주인공이 다니는 같은 회사라면 하나로. 세트 수는 줄이되 시청자가 다른 곳으로 알아야 하는 곳은 나눔.
+   같은 인물의 사는 곳(원룸·집·자취방·방)은 대본에서 이사가 나오지 않는 한 하나로. 낮·밤처럼 시간만 다른 같은 곳도 하나로.
    id 는 L01부터, 등장 많은 순. desc 는 확정형 한 문장(공간을 이루는 물건들).
 4. scene_loc: 모든 '화-장면' → 장소 id. 빠짐없이.
 5. issues: 설정 충돌(회사 이름 변경, 집 형태 혼용, 이름 오기, 직함 충돌, 소속 변경). 문장은 고치지 말고
    eps, type, what(무엇이 어떻게 다른지 구체적으로), suggest(수정 제안 한 가지), applied(엔진에서 이미 묶은 것) 로 기록.
+   eps 는 장면 표에서 그 표기가 실제로 나오는 줄의 화 번호만, 쉼표로. what 에 쓴 화 번호와 eps 는 반드시 같아야 함.
+   what 에는 대본 표기를 따옴표로 그대로 인용(예: '대성미디어'(EP4) ↔ '대성그룹'(EP1)). 추측으로 만든 충돌은 쓰지 않음.
 
 문장은 확정형. 대본에 없는 사실을 만들지 않음. JSON 만 출력:
 {"characters":[{"name":"","aliases":[],"role":"","age":""}],
@@ -67,7 +70,38 @@ def validate(b: dict, parsed: dict) -> dict:
     keys = [f"{e['ep']}-{s['no']}" for e in parsed["episodes"] for s in e["scenes"]]
     b["_missing_scenes"] = [k for k in keys if k not in b["scene_loc"]]
     b["_bad_loc"] = sorted({v for v in b["scene_loc"].values() if v not in ids})
+    b["_issue_warn"] = issue_warnings(b, parsed)
     return b
+
+
+def _eps_of(text: str) -> set[int]:
+    import re
+    out = set()
+    for a, z in re.findall(r"(\d+)\s*[~\-–]\s*(\d+)", text or ""):
+        if int(z) - int(a) < 120:
+            out |= set(range(int(a), int(z) + 1))
+    out |= {int(x) for x in re.findall(r"\d+", text or "")}
+    return out
+
+
+def issue_warnings(b: dict, parsed: dict) -> list[str]:
+    """AI 수정 제안 점검: what 에 적힌 화 번호가 eps 에 없거나, 인용한 표기가 그 화 대본에 없으면 표시."""
+    import re
+    n_ep = len(parsed["episodes"])
+    text_of = {e["ep"]: " ".join([s["slug"] for s in e["scenes"]] + [l["text"] + " " + l.get("who", "") for s in e["scenes"] for l in s["lines"]])
+               for e in parsed["episodes"]}
+    warns = []
+    for i, it in enumerate(b.get("issues", []), start=1):
+        eps = {x for x in _eps_of(str(it.get("eps", ""))) if 1 <= x <= n_ep}
+        said = {int(x) for x in re.findall(r"(?:EP\s*|에피소드\s*)(\d+)|(\d+)\s*화", str(it.get("what", ""))) for x in x if x}
+        said = {x for x in said if 1 <= x <= n_ep}
+        if said - eps:
+            warns.append(f"{i}번 제안: 설명에 나온 EP {sorted(said - eps)} 가 대상 화 목록({it.get('eps','')})에 없음")
+        for q in re.findall(r"'([^']{2,20})'", str(it.get("what", ""))):
+            hit = [e for e in (eps or text_of) if q.replace(" ", "") in text_of.get(e, "").replace(" ", "")]
+            if not hit:
+                warns.append(f"{i}번 제안: 인용한 '{q}' 가 대상 화 대본에서 보이지 않음")
+    return warns
 
 
 def who(b: dict | None, ep: int, name: str) -> str:

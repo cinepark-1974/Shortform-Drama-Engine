@@ -2,7 +2,9 @@
 
 요청 형식은 MakingShorts-Engine(rodoku.py)에서 실제로 매일 쓰고 있는 방식과 같다.
     POST https://api.openai.com/v1/images/generations → data[0].b64_json
-참고 그림을 함께 넣는 편집(images/edits) 호출은 공식 문서·실제 응답 확인 후 추가한다.
+기준 그림을 함께 넣는 컷 그림은 POST /v1/images/edits (공식 API 레퍼런스 확인, 2026-11-10):
+    image 는 파일 1~16장 (png·webp·jpg, 장당 50MB 미만), gpt-image-2 는 input_fidelity 를 넣지 않는다,
+    size 는 'WIDTHxHEIGHT'(16의 배수, 비율 1:3~3:1). 여러 장 전송 형식은 공식 openai 패키지에 맡긴다.
 """
 from __future__ import annotations
 
@@ -87,3 +89,33 @@ def generate(key: str, prompt: str, aspect: str = "9:16", quality: str = "medium
     out = io.BytesIO()
     Image.open(io.BytesIO(raw)).convert("RGB").save(out, "JPEG", quality=92)
     return out.getvalue()
+
+
+MAX_REFS = 16
+
+
+def _to_jpg(raw: bytes) -> bytes:
+    from PIL import Image
+    out = io.BytesIO()
+    Image.open(io.BytesIO(raw)).convert("RGB").save(out, "JPEG", quality=92)
+    return out.getvalue()
+
+
+def edit(key: str, prompt: str, refs: list[tuple[str, bytes]], aspect: str = "9:16", quality: str = "medium",
+         style: str = "cut", model: str = "", base_url: str | None = None) -> bytes:
+    """기준 그림(인물·장소)을 함께 넣어 컷 그림 한 장 → JPG 바이트.
+    refs = [(파일 이름, 바이트)], 앞에서부터 최대 16장. 기준 그림이 없으면 일반 생성으로."""
+    if not refs:
+        return generate(key, prompt, aspect, quality, style=style)
+    from openai import OpenAI
+    head, tail = STYLES.get(style, STYLES["cut"])
+    client = OpenAI(api_key=key, base_url=base_url, max_retries=2, timeout=300)
+    files = [(name, _to_jpg(data), "image/jpeg") for name, data in refs[:MAX_REFS]]
+    r = client.images.edit(model=model or MODEL, image=files, prompt=(head + prompt + tail)[:30000],
+                           size=SIZES.get(aspect, SIZES["9:16"]), quality=quality or "medium", n=1)
+    d = r.data[0]
+    if getattr(d, "b64_json", None):
+        return _to_jpg(base64.b64decode(d.b64_json))
+    if getattr(d, "url", None):
+        return _to_jpg(requests.get(d.url, timeout=120).content)
+    raise RuntimeError("GPT Image 편집 응답에 그림이 없습니다")

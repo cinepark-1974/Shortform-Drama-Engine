@@ -19,7 +19,7 @@ from src import bible as bb
 from src import cutter, imagegen, profiles, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v0.2"
+VERSION = "v0.3"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -107,6 +107,7 @@ STAGES = [
     ("master", "09", "마스터", "확인 · 업로드"),
 ]
 HOW = {
+    "still": "컷마다 장면 그림을 만듭니다. 화면에 나오는 인물의 확정 그림과 장소 마스터를 기준 그림으로 함께 넣어 얼굴·의상·공간을 이어 갑니다. 글자는 그림에 넣지 않고 편집에서 얹습니다.",
     "script": "대본을 읽고 작품 정리를 합니다. 엔진은 인물 표기와 장소 세트만 통일하고, 설정 충돌은 '수정 제안'으로 남깁니다. 원고 수정은 감독님이 직접 하고, 고친 원고를 다시 올리면 됩니다.",
     "cast": "인물마다 프로필을 확정하고 얼굴 후보 중 1장을 고릅니다. 장소는 넓은 마스터 1장을 고릅니다. 직접 만든 이미지는 올리기로 넣습니다.",
     "cut": "한 화를 6~8컷, 50~70초로 나눕니다. 컷마다 크기·각도·움직임 종류·대사·화면 글자를 정하고 스틸·영상 지시문을 만듭니다. 빨간 표시는 고쳐야 할 컷입니다.",
@@ -126,8 +127,9 @@ def now() -> str:
 
 
 @st.cache_data(show_spinner=False, ttl=600)
+@st.cache_data(max_entries=400, show_spinner=False)
 def img_bytes(key: str):
-    return store.get_bytes(key)
+    return store.get_bytes(key)      # 그림 파일 이름은 매번 새로 만들어지므로 저장해 두고 다시 써도 안전
 
 
 def save(work: dict):
@@ -395,6 +397,8 @@ if cur == "script":
                             unsafe_allow_html=True)
             stt = bb.stats(B, parsed)
             st.markdown(f"#### 수정 제안 {len(B['issues'])}건 <span class='small'>엔진은 대본 문장을 고치지 않습니다. 감독님이 원고를 고친 뒤 다시 올리면 됩니다.</span>", unsafe_allow_html=True)
+            for w in B.get("_issue_warn") or bb.issue_warnings(B, parsed):
+                st.markdown(f'<span class="tag todo">확인</span> <span class="small">{w}</span>', unsafe_allow_html=True)
             for i in B["issues"]:
                 st.markdown(f"<div class='issue'><b>EP {i.get('eps','')} · {i.get('type','')}</b><br>{i.get('what','')}"
                             f"<br><span class='small'>제안: {i.get('suggest','')} · 엔진 처리: {i.get('applied','')}</span></div>", unsafe_allow_html=True)
@@ -403,11 +407,11 @@ if cur == "script":
                 st.markdown(f"#### 인물 {len(B['characters'])}명")
                 st.dataframe([{"이름": c["name"], "표기": ", ".join(c.get("aliases", [])), "대사": stt["lines"].get(c["name"], 0),
                                "역할": c.get("role", ""), "나이": c.get("age", "")} for c in sorted(B["characters"], key=lambda c: -stt["lines"].get(c["name"], 0))],
-                             hide_index=True, use_container_width=True)
+                             hide_index=True, width="stretch")
             with b2:
                 st.markdown(f"#### 장소 세트 {len(B['locations'])}곳 <span class='small'>장면 머리 {len(summ['places'])}가지 → 세트 {len(B['locations'])}곳</span>", unsafe_allow_html=True)
                 st.dataframe([{"id": l["id"], "세트": l["name"], "장면": stt["loc"].get(l["id"], 0), "공간": l.get("desc", "")}
-                              for l in sorted(B["locations"], key=lambda l: -stt["loc"].get(l["id"], 0))], hide_index=True, use_container_width=True)
+                              for l in sorted(B["locations"], key=lambda l: -stt["loc"].get(l["id"], 0))], hide_index=True, width="stretch")
 
     with t_board:
         p = progress(work)
@@ -418,7 +422,7 @@ if cur == "script":
             a, b = stage_counts(work)[k]
             rows.append({"단계": next(f"{n} {t}" for kk, n, t, d in STAGES if kk == k), "끝난 화": a, "전체": b,
                          "진행률": f"{100 * a / b:.0f}%" if b else "0%", "한 화 안 비중": f"{EP_W[k]}%"})
-        st.dataframe(rows, hide_index=True, use_container_width=True)
+        st.dataframe(rows, hide_index=True, width="stretch")
 
     with t_read:
         n = st.number_input("화", 1, len(parsed["episodes"]), 1, key="read_ep")
@@ -509,7 +513,7 @@ elif cur == "cast":
                 with cols[i % 4]:
                     data = img_bytes(k)
                     if data:
-                        st.image(data, use_container_width=True)
+                        st.image(data, width="stretch")
                     picked = info.get("pick") == k
                     if st.button("✓ 확정됨" if picked else "이걸로 확정", key=f"pk_{k}", type="primary" if picked else "secondary"):
                         info["pick"] = None if picked else k
@@ -578,11 +582,13 @@ elif cur == "cut":
 
     def store_cuts(ep_no: int, cuts: list, src: str):
         allcuts[str(ep_no)] = {"cuts": cuts, "src": src, "at": now()}
-        iss = cutter.check(cuts, known_c, known_l)
+        iss = cutter.check(cuts, known_c, known_l, [s["no"] for s in parsed["episodes"][ep_no - 1]["scenes"]])
         work.setdefault("eps", {}).setdefault(str(ep_no), {})["cut"] = "fix" if any(i["level"] == "fix" for i in iss) else "done"
 
     c1, c2, c3 = st.columns([1, 1, 2])
     with c1:
+        if "cut_ep_next" in st.session_state:
+            st.session_state["cut_ep"] = st.session_state.pop("cut_ep_next")
         ep_no = st.number_input("화", 1, n_ep, 1, key="cut_ep")
     ep = parsed["episodes"][ep_no - 1]
     with c2:
@@ -596,16 +602,14 @@ elif cur == "cut":
     with c3:
         st.write("")
         todo = [e["ep"] for e in parsed["episodes"] if str(e["ep"]) not in allcuts]
-        if st.button(f"남은 {len(todo)}화 전부 자동 분할", disabled=not (KEYS.get("ANTHROPIC_API_KEY") and todo)):
-            bar = st.progress(0.0, text="시작")
-            for i, n in enumerate(todo, start=1):
-                try:
-                    r = cutter.split(KEYS["ANTHROPIC_API_KEY"], parsed["episodes"][n - 1], B, MODEL)
-                    store_cuts(n, r["cuts"], r["model"])
-                    save(work)                          # 화마다 저장 → 중간에 끊겨도 이어서
-                except Exception as ex:
-                    st.error(f"EP {n}: {ex}")
-                bar.progress(i / len(todo), text=f"EP {n} 완료 ({i}/{len(todo)})")
+        # 한꺼번에 돌리지 않는다: 버튼 한 번 = 한 화. 감독님이 결과를 보고 다음 화로 넘어간다.
+        if todo and st.button(f"다음 화 나누기 (EP {todo[0]})", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
+            n = todo[0]
+            with st.spinner(f"EP {n} 컷 나누는 중… (20~40초)"):
+                r = cutter.split(KEYS["ANTHROPIC_API_KEY"], parsed["episodes"][n - 1], B, MODEL)
+            store_cuts(n, r["cuts"], r["model"])
+            save(work)
+            st.session_state["cut_ep_next"] = n      # 다음 실행에서 이 화를 화면에 띄움
             st.rerun()
     smp = SAMPLES / f"danjjan_ep{ep_no}_cuts.json"
     if parsed.get("title") == "단짠단짠" and smp.exists() and st.button(f"EP {ep_no} 샘플 분할 적용 (Claude 작성본)"):
@@ -624,7 +628,7 @@ elif cur == "cut":
         bar = "".join(f'<i title="{c["id"]} {c["dur"]}초" style="width:{100 * c["dur"] / max(total, 1):.1f}%;background:{color[c["motion"]]}"></i>' for c in cuts)
         st.markdown(f"<span class='small'>러닝타임</span> <b style='color:var(--navy)'>{total:.1f}초</b> · 컷 {len(cuts)}개 · "
                     f"<span class='small'>연회색 정지 · 파랑 짧은 움직임 · 남색 완전 영상</span><div class='rt'>{bar}</div>", unsafe_allow_html=True)
-        iss = cutter.check(cuts, known_c, known_l)
+        iss = cutter.check(cuts, known_c, known_l, [s["no"] for s in ep["scenes"]])
         main_iss = [i for i in iss if i["level"] != "info"]
         extras = sorted({i["msg"].split("'")[1] for i in iss if i["level"] == "info"})
         for i in main_iss:
@@ -659,7 +663,138 @@ elif cur == "cut":
                 except Exception as ex:
                     st.error(f"JSON 형식 오류: {ex}")
 
-# ===== 04 이후 =====
+# ===== 04 스틸 =====
+elif cur == "still":
+    allcuts = work.get("cuts", {})
+    stills = work.setdefault("stills", {})
+    eps_state = work.setdefault("eps", {})
+    ready = [e["ep"] for e in parsed["episodes"] if str(e["ep"]) in allcuts]
+    done_n = sum(1 for v in eps_state.values() if v.get("still") == "done")
+    brief("still", f"스틸 완료 {done_n} / {len(parsed['episodes'])}화")
+    if not ready:
+        st.info("03 컷에서 먼저 컷을 나눈 화가 있어야 합니다.")
+        st.stop()
+    known_c = {c["name"] for c in B["characters"]}
+    castdesc = {c: (work.get("cast", {}).get(c, {}).get("prompt_en", "") or c).split(".")[0] for c in known_c}
+    locdesc = {l["id"]: (l["name"], work.get("loc", {}).get(l["id"], {}).get("prompt_en", "") or l.get("desc", "")) for l in B["locations"]}
+
+    def refs_for(c):
+        """컷에 넣을 기준 그림: 화면에 나오는 인물(확정 그림) → 장소 마스터. 이름 순서가 지시문의 '기준 그림 n번'."""
+        out = []
+        for ch in c["chars"]:
+            base = ch.split(":")[0]
+            k = work.get("cast", {}).get(base, {}).get("pick")
+            if k and base not in [n for n, _ in out]:
+                out.append((base, k))
+        k = work.get("loc", {}).get(c["loc"], {}).get("pick")
+        if k:
+            out.append((c["loc"], k))
+        return out
+
+    def still_state(n):
+        cuts = allcuts[str(n)]["cuts"]
+        rec = stills.setdefault(str(n), {})
+        picked = sum(1 for c in cuts if rec.get(c["id"], {}).get("pick"))
+        return cuts, rec, picked
+
+    todo = [n for n in ready if eps_state.get(str(n), {}).get("still") != "done"]
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        if "still_ep_next" in st.session_state:
+            st.session_state["still_ep"] = st.session_state.pop("still_ep_next")
+        default = todo[0] if todo else ready[0]
+        ep_no = st.selectbox("화", ready, index=ready.index(st.session_state.get("still_ep", default)) if st.session_state.get("still_ep", default) in ready else 0,
+                             format_func=lambda n: f"EP {n}" + (" ✓" if eps_state.get(str(n), {}).get("still") == "done" else ""), key="still_ep")
+    with c2:
+        n_c = st.selectbox("컷당 후보", [1, 2], index=0, help="2장이면 고르는 재미는 있지만 비용이 두 배입니다.")
+    cuts, rec, picked = still_state(ep_no)
+    missing = [c for c in cuts if not rec.get(c["id"], {}).get("cands")]
+
+    def make(targets):
+        """targets = [(컷, 지시문, 기준그림)] → 동시에 4장씩 생성, 저장은 이 함수 안(메인 흐름)에서."""
+        def one(t):
+            c, prompt, refs = t
+            try:
+                return imagegen.edit(KEYS["OPENAI_API_KEY"], prompt, [(f"{n}.jpg", img_bytes(k)) for n, k in refs],
+                                     "9:16", quality, style="cut", model=KEYS.get("IMAGE_MODEL", ""))
+            except Exception as ex:
+                return ex
+        jobs = [t for t in targets for _ in range(n_c)]
+        with ThreadPoolExecutor(4) as ex:
+            results = list(ex.map(one, jobs))
+        for (c, prompt, refs), r in zip(jobs, results):
+            if isinstance(r, Exception):
+                st.error(f"{c['id']}: {r}")
+                continue
+            k = f"works/{work['id']}/still/ep{ep_no:03d}/{c['id']}_{uuid.uuid4().hex[:6]}.jpg"
+            store.put_bytes(k, r, "image/jpeg")
+            cell = rec.setdefault(c["id"], {})
+            cell.setdefault("cands", []).append(k)
+            cell.setdefault("pick", k)                 # 첫 그림을 일단 확정 → 마음에 안 들면 다시 만들기
+            cell["prompt"] = prompt
+
+    def finish():
+        cs, rc, pk = still_state(ep_no)
+        eps_state.setdefault(str(ep_no), {})["still"] = "done" if pk == len(cs) else "doing"
+        save(work)
+
+    with c3:
+        st.write("")
+        label = f"EP {ep_no} 스틸 만들기 ({len(missing)}컷)" if missing else f"EP {ep_no} 스틸 완료 · {picked}/{len(cuts)}컷 확정"
+        if st.button(label, type="primary", disabled=not (KEYS.get("OPENAI_API_KEY") and missing)):
+            with st.status(f"EP {ep_no} 스틸 {len(missing) * n_c}장 생성 중… (4장씩 동시, 1~3분)") as s:
+                make([(c, cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)]), refs_for(c)) for c in missing])
+                finish()
+                s.update(label="생성 완료", state="complete")
+            st.rerun()
+    st.caption("버튼 한 번에 한 화만 만듭니다. 컷마다 첫 그림이 자동으로 확정되고, 마음에 안 드는 컷만 '이 컷 다시'로 바꾸면 됩니다.")
+
+    st.markdown(f"**EP {ep_no}** · {parsed['episodes'][ep_no - 1]['emotion']} · <span class='hook'>{parsed['episodes'][ep_no - 1]['hook']}</span>", unsafe_allow_html=True)
+    cols = st.columns(4)
+    for i, c in enumerate(cuts):
+        cell = rec.get(c["id"], {})
+        refs = refs_for(c)
+        with cols[i % 4]:
+            st.markdown(f"<div class='cut'><div class='h'>{c['id']} · {c['size']}<span class='d'>{c['dur']}s</span> "
+                        f"<span class='tag {'mv' if c['motion'] == 'video' else 'ok'}'>{cutter.MOTIONS[c['motion']]}</span></div>"
+                        f"<div class='s'>{c['action']}</div>"
+                        f"<div class='s'>기준 그림: {', '.join(n for n, _ in refs) or '없음 (지시문만)'}</div></div>", unsafe_allow_html=True)
+            if cell.get("pick"):
+                data = img_bytes(cell["pick"])
+                if data:
+                    st.image(data, width="stretch")
+            others = [k for k in cell.get("cands", []) if k != cell.get("pick")]
+            if others:
+                oc = st.columns(min(3, len(others)))
+                for j, k in enumerate(others[-3:]):
+                    with oc[j]:
+                        d = img_bytes(k)
+                        if d:
+                            st.image(d, width="stretch")
+                        if st.button("이걸로", key=f"spk_{k}"):
+                            cell["pick"] = k
+                            finish()
+                            st.rerun()
+            with st.expander("지시문 · 다시 만들기"):
+                base_p = cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs])
+                p2 = st.text_area("지시문", base_p, key=f"sp_{c['id']}", height=160, label_visibility="collapsed")
+                bad = imagegen.banned_in(p2)
+                if bad:
+                    st.markdown(f'<span class="tag fix">금지어</span> {" · ".join(bad)}', unsafe_allow_html=True)
+                if st.button("이 컷 다시", key=f"sre_{c['id']}", disabled=not (KEYS.get("OPENAI_API_KEY") and not bad)):
+                    with st.spinner(f"{c['id']} 다시 만드는 중…"):
+                        make([(c, p2, refs)])
+                        rec[c["id"]]["pick"] = rec[c["id"]]["cands"][-1]
+                        finish()
+                    st.rerun()
+    if picked == len(cuts) and todo and ep_no in todo:
+        finish()
+    nxt = [n for n in todo if n != ep_no]
+    if eps_state.get(str(ep_no), {}).get("still") == "done" and nxt and st.button(f"다음 화로 (EP {nxt[0]})"):
+        st.session_state["still_ep_next"] = nxt[0]
+        st.rerun()
+
+# ===== 05 이후 =====
 else:
     brief(cur, "다음 버전")
-    st.info("v0.2 는 대본 · 작품 정리 · 캐스팅 · 회당 컷 분할까지입니다. 다음 버전: 04 스틸 → 05 영상 → 06 더빙 → 07 자막·사운드 → 08 편집 → 09 마스터.")
+    st.info("지금 버전은 대본 · 작품 정리 · 캐스팅 · 컷 분할 · 스틸까지입니다. 다음: 05 영상 → 06 더빙 → 07 자막·사운드 → 08 편집 → 09 마스터.")
