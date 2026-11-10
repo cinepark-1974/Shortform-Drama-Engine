@@ -20,15 +20,16 @@ SIZES = {"9:16": "864x1536", "16:9": "1536x864", "1:1": "1024x1024", "3:4": "102
 # 화면 톤 기준. 확정형 문장만 쓴다.
 # 실사 질감 규칙은 Mr. MOON 참고 프롬프트(스트리트 포토, 2026-11-10)에서 가져옴: 피부 결, 필름 색, 자연광, 금지 목록.
 # 참고 프롬프트의 워터마크 문구는 다른 사람의 표식이라 넣지 않는다.
-SKIN = ("Real human skin with visible pores, faint redness on the cheeks, tiny natural blemishes, "
-        "natural facial asymmetry and real expression lines. Believable anatomy and natural facial proportions. ")
+SKIN = ("Real skin texture with fine visible pores and a healthy natural glow, natural expression lines, "
+        "believable anatomy and natural facial proportions. ")
 NEG = (" No beauty filter, no airbrushing, no plastic skin, no waxy skin, no CGI look, no 3D render look, "
        "no HDR, no oversharpening, no exaggerated features. "
        "No text, no letters, no logo, no watermark anywhere in the image.")
 STYLES = {
     # 02 캐스팅 인물 기준 그림: 스튜디오 프로필 사진. 감정·장면은 넣지 않되, 화보처럼 매끈하지 않게
     # 작품 전체 톤(필름 색, 자연광)에 맞춘 자연스러운 사진으로.
-    "ref": ("A real, unretouched profile photograph of an actor for a Korean drama casting file. " + SKIN,
+    "ref": ("A real profile photograph of a Korean drama lead actor with an attractive, camera-friendly face: "
+            "clear bright eyes, well-defined features, fresh youthful look, light natural makeup. " + SKIN,
             " Plain light grey seamless backdrop. Soft window daylight from one side with a gentle real shadow "
             "on the other side of the face, no flat studio flash. Calm neutral face, mouth closed, relaxed shoulders, "
             "a natural candid feel instead of a posed fashion look. Medium-format film photograph, Kodak Portra 160 color, "

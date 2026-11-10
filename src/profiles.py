@@ -12,11 +12,14 @@ SYSTEM = """당신은 한국 실사 드라마의 캐스팅 디렉터이자 미�
 - 대본에 적힌 사실(나이, 직업, 처지, 관계)을 먼저 따르고, 없는 것은 그 인물의 처지에 맞게 정합니다.
 - 모든 문장은 확정형. '살짝', '약간', '정도', '또는', '~처럼 보임', '~수 있음' 금지. 한 가지 상태만.
 - 실존 배우·연예인을 언급하거나 닮게 하지 않습니다.
+- 주연·주요 조연은 TV 드라마 주연 배우급의 매력적인 외모로 정합니다. 가난·피로·처지는 얼굴이 아니라 의상·소품·머리 손질로 보여 줍니다.
+  얼굴은 또렷한 이목구비, 맑고 큰 눈, 생기 있는 표정, 건강한 피부로. '가는 눈', '얇은 입술', '창백한' 같은 평범하거나 지친 인상의 특징은 주연에게 쓰지 않습니다.
 - 의상은 한 시즌 내내 입을 한 벌. 색은 베이지·아이보리·네이비·그레이·블랙 같은 차분한 색 위주.
 - prompt_en 은 이미지 생성용 영어 한 문단: 정면 상반신, 눈높이 카메라, 차분한 무표정, 밝은 회색 무지 배경.
   배경·조명·필름 질감은 엔진이 자동으로 붙이므로 인물만 씀.
   나이·얼굴형·눈매·머리 모양(길이, 묶음, 잔머리)·피부 톤·의상 소재와 색을 구체적으로. 예: 'loose low ponytail with flyaway strands framing the face, pale blue cotton blouse with a ruffled collar'.
-  'beautiful', 'stunning', 'flawless' 같은 미화 단어 금지(인공 미인 얼굴이 나옴). 'slightly', 'or' 금지.
+  주연·주요 조연은 'attractive Korean actress/actor in a lead role' 처럼 매력을 분명히 쓰고, 이목구비를 구체적으로(clear bright eyes, soft defined jawline 등).
+  'flawless', 'airbrushed', 'perfect skin' 은 금지(인공 미인 얼굴이 나옴). 'slightly', 'or' 금지.
 - 장소 prompt_en: 사람 없는 넓은 마스터 샷, 눈높이, 낮의 창 자연광(밤 장소면 실제 조명), 서울의 실제 같은 공간.
 
 JSON 만 출력:
@@ -75,7 +78,7 @@ def to_prompt(api_key: str, kind: str, name: str, info: dict, model: str = "") -
     if kind == "cast":
         src = f"인물 {name}, 나이 {info.get('age','')}. 외모: {info.get('look_ko','')} 의상: {info.get('outfit_ko','')}"
         rule = ("정면 상반신, 눈높이 카메라, 차분한 무표정, 밝은 회색 무지 배경. 배경·조명·필름 질감 문장은 쓰지 않음(엔진이 붙임). "
-                "'beautiful', 'stunning', 'flawless', 'slightly', 'or' 금지.")
+                "드라마 주연 배우급의 매력적인 얼굴로 이목구비를 구체적으로. 'flawless', 'airbrushed', 'slightly', 'or' 금지.")
     else:
         src = f"장소 {name}. {info.get('desc_ko','')}"
         rule = "사람 없는 넓은 마스터 샷, 눈높이. 'slightly', 'or' 금지."

@@ -559,6 +559,17 @@ elif cur == "cast":
             with st.expander(f"{'✓ ' if info.get('pick') else ''}{c} · 대사 {stt['lines'].get(c, 0)}줄 · {roles.get(c, {}).get('role', '')[:40]}", expanded=not info.get("pick")):
                 if info.get("look_ko") or info.get("outfit_ko"):
                     st.markdown(f"<div class='small'>{info.get('age','')} · 외모: {info.get('look_ko','')}<br>의상: {info.get('outfit_ko','')}</div>", unsafe_allow_html=True)
+                if info.get("look_ko") and st.button("외모 다시 잡기 (Claude)", key=f"rd_{c}", disabled=not KEYS.get("ANTHROPIC_API_KEY"),
+                                                    help="주연급 외모 기준으로 이 인물의 외모·의상·영어 지시문을 새로 씁니다."):
+                    with st.spinner(f"{c} 외모를 다시 잡는 중…"):
+                        d = profiles.draft(KEYS["ANTHROPIC_API_KEY"], parsed, [c], {}, MODEL, B)
+                    got = next((x for x in d.get("characters", []) if x.get("prompt_en")), None)
+                    if got:
+                        got["name"] = c
+                        info.update(got)
+                        save(work)
+                        st.rerun()
+                    st.error("다시 잡기에 실패했습니다. 한 번 더 눌러 주세요.")
                 asset_board("cast", c, c, info, "3:4", 4)
 
     with t_loc:
