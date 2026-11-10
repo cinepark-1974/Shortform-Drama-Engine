@@ -101,8 +101,11 @@ def slug(name: str) -> str:
     return re.sub(r"[^\w가-힣_-]", "", s) or uuid.uuid4().hex[:6]
 
 
+KST = dt.timezone(dt.timedelta(hours=9))
+
+
 def now() -> str:
-    return dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    return dt.datetime.now(KST).strftime("%Y-%m-%d %H:%M")
 
 
 @st.cache_data(show_spinner=False, ttl=600)
@@ -233,7 +236,7 @@ if not work:
         if summ["missing_hook"]:
             st.warning(f"훅 자막이 없는 화: {summ['missing_hook']}")
         if st.button("이 대본으로 작품 만들기", type="primary"):
-            wid = dt.datetime.now().strftime("%y%m%d") + "-" + uuid.uuid4().hex[:4]
+            wid = dt.datetime.now(KST).strftime("%y%m%d") + "-" + uuid.uuid4().hex[:4]
             store.put_bytes(f"works/{wid}/script.{up.name.rsplit('.', 1)[-1].lower()}", raw)
             save({"id": wid, "title": parsed["title"] or up.name, "created": now(), "channel": channel, "subs": subs,
                   "parsed": parsed, "summary": summ, "bible": None, "main_n": 6, "loc_n": 8,
@@ -263,7 +266,7 @@ if cur == "script":
         c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("AI로 작품 정리 (Claude)", type="primary", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
-                with st.status("장면 169개를 읽고 인물·장소를 통일하는 중… (1~2분)") as s:
+                with st.status("장면 전체를 읽고 인물·장소를 통일하는 중… (3~5분, 창을 닫지 마세요)") as s:
                     work["bible"] = bb.build(KEYS["ANTHROPIC_API_KEY"], parsed, MODEL)
                     save(work)
                     s.update(label="작품 정리 완료", state="complete")
@@ -500,7 +503,7 @@ elif cur == "cut":
             st.rerun()
     smp = SAMPLES / f"danjjan_ep{ep_no}_cuts.json"
     if parsed.get("title") == "단짠단짠" and smp.exists() and st.button(f"EP {ep_no} 샘플 분할 적용 (Claude 작성본)"):
-        store_cuts(ep_no, cutter.normalize(json.loads(smp.read_text("utf-8"))["cuts"], ep), "sample")
+        store_cuts(ep_no, cutter.normalize(json.loads(smp.read_text("utf-8"))["cuts"], ep, B), "sample")
         save(work)
         st.rerun()
 
@@ -516,10 +519,13 @@ elif cur == "cut":
         st.markdown(f"<span class='small'>러닝타임</span> <b style='color:var(--navy)'>{total:.1f}초</b> · 컷 {len(cuts)}개 · "
                     f"<span class='small'>연회색 정지 · 파랑 짧은 움직임 · 남색 완전 영상</span><div class='rt'>{bar}</div>", unsafe_allow_html=True)
         iss = cutter.check(cuts, known_c, known_l)
-        if iss:
-            for i in iss:
-                st.markdown(f"<span class='tag {i['level']}'>{'고침' if i['level'] == 'fix' else '확인'}</span> {i['id']} · {i['msg']}", unsafe_allow_html=True)
-        else:
+        main_iss = [i for i in iss if i["level"] != "info"]
+        extras = sorted({i["msg"].split("'")[1] for i in iss if i["level"] == "info"})
+        for i in main_iss:
+            st.markdown(f"<span class='tag {i['level']}'>{'고침' if i['level'] == 'fix' else '확인'}</span> {i['id']} · {i['msg']}", unsafe_allow_html=True)
+        if extras:
+            st.markdown(f"<span class='tag ok'>단역</span> {', '.join(extras)} <span class='small'>(바이블 밖 인물, 기준 이미지 없이 생성)</span>", unsafe_allow_html=True)
+        if not main_iss:
             st.markdown("<span class='tag ok'>점검 통과</span> 컷 수 · 길이 · 움직임 규칙 · 대사 길이 · 금지어 모두 통과", unsafe_allow_html=True)
         for c in cuts:
             loc = locdesc.get(c["loc"], ("?", ""))[0]
@@ -541,7 +547,7 @@ elif cur == "cut":
             raw = st.text_area("cuts", json.dumps(cuts, ensure_ascii=False, indent=1), height=300, label_visibility="collapsed")
             if st.button("고친 내용 저장"):
                 try:
-                    store_cuts(ep_no, cutter.normalize(json.loads(raw), ep), "edited")
+                    store_cuts(ep_no, cutter.normalize(json.loads(raw), ep, B), "edited")
                     save(work)
                     st.rerun()
                 except Exception as ex:

@@ -31,7 +31,8 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 한 화의 대본을 컷으로 나눕니다. 시청자는 휴대폰 세로 화면으로 봅니다.
 
 규칙
-- 컷 6~8개. 컷 길이 합계 50~70초. 컷 하나 2~10초.
+- 컷 6~8개. 컷 길이 합계 50~70초(목표 56초). 컷 하나 3~10초. 합계가 50초 미만이면 컷을 늘리지 말고 각 컷 dur 를 늘림.
+- 대사 컷의 dur 는 (대사 음절 수 ÷ 4) + 1초 이상.
 - 1번 컷은 첫 3초 안에 화의 훅을 보여 주는 컷. 마지막 컷은 대본의 '끊긴다' 순간이며 motion 은 반드시 "video".
 - 감정이 터지는 클라이맥스 컷은 climax true, motion "video".
 - motion: "still"(정지 그림+카메라 움직임), "move"(짧은 움직임: 눈 깜빡임·고개 돌림·손 움직임), "video"(완전 영상).
@@ -59,7 +60,9 @@ def syl(t: str) -> int:
 
 def episode_text(ep: dict, bible: dict | None) -> str:
     from src import bible as bb
-    out = [f"EP {ep['ep']} | {ep['emotion']}", f"[훅 자막] {ep['hook']}"]
+    names = [c["name"] for c in (bible or {}).get("characters", [])]
+    out = [f"[인물 표기] {', '.join(names)}  (chars·dialogue.who 에는 이 이름만 그대로 씀. 목록에 없는 단역은 '신입A'처럼 짧게)",
+           f"EP {ep['ep']} | {ep['emotion']}", f"[훅 자막] {ep['hook']}"]
     for s in ep["scenes"]:
         loc = bb.loc_of(bible, ep["ep"], s["no"])
         out.append(f"\nS#{s['no']}. {s['slug']}  → 장소 id {loc['id'] if loc else '?'} ({loc['name'] if loc else ''})")
@@ -80,18 +83,49 @@ def split(api_key: str, ep: dict, bible: dict | None, model: str = "") -> dict:
     txt = "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
     data = json.loads(repair_json(txt))
     cuts = data.get("cuts", []) if isinstance(data, dict) else []
-    return {"cuts": normalize(cuts, ep), "model": model or DEFAULT_MODEL}
+    return {"cuts": normalize(cuts, ep, bible), "model": model or DEFAULT_MODEL}
 
 
-def normalize(cuts: list, ep: dict) -> list:
-    """AI 응답을 그대로 믿지 않고 형식을 맞춘다."""
+def name_map(bible: dict | None) -> dict:
+    """'안내직원'·'한세영'·'진혁' 같은 표기 → 바이블 통일 이름 (띄어쓰기 무시)."""
+    m = {}
+    for c in (bible or {}).get("characters", []):
+        for f in [c["name"], *c.get("aliases", [])]:
+            m[f.replace(" ", "")] = c["name"]
+    for f, n in (bible or {}).get("speaker_map", {}).get("global", {}).items():
+        m.setdefault(f.replace(" ", ""), n)
+    return m
+
+
+def canon(name: str, nm: dict) -> str:
+    base, sep, part = name.partition(":")
+    return nm.get(base.strip().replace(" ", ""), base.strip()) + (sep + part if sep else "")
+
+
+def fit_durations(cuts: list, lo: float = 50, target: float = 56, hi: float = 70) -> list:
+    """대사 길이를 먼저 맞추고, 합계가 50초 미만이면 56초로, 70초 초과면 줄여서 맞춘다 (컷 하나 3~10초)."""
+    def need(c):
+        return syl(c["dialogue"]["text"]) / 4 + 1.0 if c.get("dialogue") else 3.0
+    for c in cuts:
+        c["dur"] = round(min(10.0, max(c["dur"], need(c), 3.0)), 1)
+    total = sum(c["dur"] for c in cuts)
+    if cuts and (total < lo or total > hi):
+        k = target / total
+        for c in cuts:
+            c["dur"] = round(min(10.0, max(need(c), 3.0, c["dur"] * k)), 1)
+    return cuts
+
+
+def normalize(cuts: list, ep: dict, bible: dict | None = None) -> list:
+    """AI 응답을 그대로 믿지 않고 형식을 맞춘다: 이름은 바이블 표기로, 길이는 규칙대로."""
+    nm = name_map(bible)
     out = []
     for i, c in enumerate(cuts if isinstance(cuts, list) else [], start=1):
         if not isinstance(c, dict):
             continue
         d = c.get("dialogue")
         if isinstance(d, dict) and d.get("text"):
-            d = {"who": str(d.get("who", "")), "text": str(d["text"]), "on_screen": bool(d.get("on_screen", True))}
+            d = {"who": canon(str(d.get("who", "")), nm), "text": str(d["text"]), "on_screen": bool(d.get("on_screen", True))}
         else:
             d = None
         try:
@@ -103,12 +137,12 @@ def normalize(cuts: list, ep: dict) -> list:
             "size": str(c.get("size", "MS")).upper().replace(" ", ""), "angle": str(c.get("angle", "정면")),
             "camera": str(c.get("camera", "고정")), "dur": dur,
             "motion": c.get("motion") if c.get("motion") in MOTIONS else "move",
-            "climax": bool(c.get("climax", False)), "chars": [str(x) for x in (c.get("chars") or [])],
+            "climax": bool(c.get("climax", False)), "chars": [canon(str(x), nm) for x in (c.get("chars") or [])],
             "loc": str(c.get("loc", "")), "action": str(c.get("action", "")).strip(),
             "action_en": str(c.get("action_en", "")).strip(), "dialogue": d,
             "screen_text": str(c.get("screen_text") or ""), "sfx": str(c.get("sfx") or ""),
         })
-    return out
+    return fit_durations(out)
 
 
 def check(cuts: list, known_chars: set, known_locs: set) -> list[dict]:
@@ -138,7 +172,7 @@ def check(cuts: list, known_chars: set, known_locs: set) -> list[dict]:
         for ch in c["chars"]:
             base = ch.split(":")[0]
             if known_chars and base not in known_chars:
-                issues.append({"id": c["id"], "level": "todo", "msg": f"인물 '{base}' 가 바이블에 없음"})
+                issues.append({"id": c["id"], "level": "info", "msg": f"단역 '{base}' (바이블 밖 인물, 기준 이미지 없이 생성)"})
         d = c["dialogue"]
         if d:
             need = syl(d["text"]) / 4 + 0.5
