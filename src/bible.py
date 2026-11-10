@@ -98,6 +98,8 @@ def issue_warnings(b: dict, parsed: dict) -> list[str]:
         if said - eps:
             warns.append(f"{i}번 제안: 설명에 나온 EP {sorted(said - eps)} 가 대상 화 목록({it.get('eps','')})에 없음")
         for q in re.findall(r"'([^']{2,20})'", str(it.get("what", ""))):
+            if any(ch in q for ch in ",·—-–()") or " " in q.strip():   # 장면 머리·화자 목록 인용은 대조하지 않음 (오탐 방지)
+                continue
             hit = [e for e in (eps or text_of) if q.replace(" ", "") in text_of.get(e, "").replace(" ", "")]
             if not hit:
                 warns.append(f"{i}번 제안: 인용한 '{q}' 가 대상 화 대본에서 보이지 않음")
