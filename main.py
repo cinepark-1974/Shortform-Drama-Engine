@@ -174,6 +174,15 @@ def stage_counts(work: dict | None) -> dict:
     return out
 
 
+def cast_split(work: dict) -> str:
+    """캐스팅 칸 수를 인물·장소로 나눠 보여 준다 (예: 인물 5/13 · 장소 8/8)."""
+    chars = chars_ranked(work)[: work.get("main_n", 6)]
+    locs = locs_ranked(work)[: work.get("loc_n", 8)]
+    a = sum(1 for c in chars if work.get("cast", {}).get(c, {}).get("pick"))
+    b = sum(1 for l in locs if work.get("loc", {}).get(l["id"], {}).get("pick"))
+    return f"인물 {a}/{len(chars)} · 장소 {b}/{len(locs)}"
+
+
 EP_STAGES = ["cut", "still", "clip", "dub", "sub", "edit", "master"]
 EP_W = {"cut": 5, "still": 20, "clip": 30, "dub": 10, "sub": 10, "edit": 15, "master": 10}   # 한 화 안에서 작업량 비중(%)
 BINGE = 7                                                                                      # 몰아보기 한 편 = 7화
@@ -219,7 +228,7 @@ def progress(work: dict) -> dict:
         nk = "cast"
         left = [c for c in chars_ranked(work)[: work.get("main_n", 6)] if not work.get("cast", {}).get(c, {}).get("pick")] + \
                [l["name"] for l in locs_ranked(work)[: work.get("loc_n", 8)] if not work.get("loc", {}).get(l["id"], {}).get("pick")]
-        nxt = f"02 캐스팅 ({a}/{b} 확정)"
+        nxt = f"02 캐스팅 ({cast_split(work)} 확정)"
     elif streak < n_ep:
         nk, nep = EP_STAGES[levels[streak]], streak + 1
         nxt = f"EP {nep} · " + next(f"{n} {t}" for kk, n, t, d in STAGES if kk == nk)
@@ -490,7 +499,7 @@ if cur == "script":
 elif cur == "cast":
     chars_all, locs_all = chars_ranked(work), locs_ranked(work)
     a, b = stage_counts(work)["cast"]
-    brief("cast", f"확정 {a} / {b}" + (" · 캐스팅 완료" if b and a >= b else ""))
+    brief("cast", f"확정 {cast_split(work)}" + (" · 캐스팅 완료" if b and a >= b else ""))
     t_char, t_loc = st.tabs(["인물", "장소 (마스터)"])
     stt = bb.stats(B, parsed)
 
