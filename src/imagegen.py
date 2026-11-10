@@ -28,7 +28,7 @@ NEG = (" No beauty filter, no airbrushing, no plastic skin, no waxy skin, no CGI
 STYLES = {
     # 02 캐스팅 인물 기준 그림: 스튜디오 프로필 사진. 감정·장면은 넣지 않되, 화보처럼 매끈하지 않게
     # 작품 전체 톤(필름 색, 자연광)에 맞춘 자연스러운 사진으로.
-    "ref": ("SUBJECT & IDENTITY: An ultra-photorealistic studio portrait for a Korean drama casting file, "
+    "ref": ("SUBJECT & IDENTITY: A high-end Korean actor casting portrait, ultra-photorealistic studio photography, "
             "a lead-role actor with an attractive, camera-friendly face. " + SKIN,
             " HAIR & FABRIC: individual hair fibers visible with realistic density, uneven highlights and naturally separated "
             "strands; real knit and fabric texture that follows the body with gentle tension and soft folds. "
@@ -39,7 +39,7 @@ STYLES = {
             "real dimensionality without heavy beauty retouching. 85mm portrait lens, realistic depth of field, natural "
             "optical rendering, fine photographic grain, accurate skin and fabric texture, natural color grading." + NEG +
             " No artificial hair clumps, no plastic hair shine, no exaggerated anatomy, no distorted facial features, "
-            "no unnatural fabric deformation."),
+            "no artificial facial symmetry, no oversized head, no exaggerated jawline, no unnatural fabric deformation."),
     # 02 캐스팅 장소 마스터: 사람 없는 넓은 공간.
     "location": ("A real wide photograph of an empty location in Seoul, scouted for a Korean drama. ",
                  " Natural daylight with real shadows and uneven exposure, lived-in details, eye-level lens. "
