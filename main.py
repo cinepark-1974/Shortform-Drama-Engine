@@ -15,11 +15,11 @@ from pathlib import Path
 
 import streamlit as st
 
-from src import bible as bb
+from src import videogen, bible as bb
 from src import cutter, imagegen, profiles, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v0.3"
+VERSION = "v0.4"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -107,6 +107,7 @@ STAGES = [
     ("master", "09", "마스터", "확인 · 업로드"),
 ]
 HOW = {
+    "clip": "확정한 스틸을 첫 프레임으로 넣어 짧은 영상을 만듭니다 (Replicate · Kling). 소리는 만들지 않고 06·07 단계에서 대사와 효과음을 얹습니다.",
     "still": "컷마다 장면 그림을 만듭니다. 화면에 나오는 인물의 확정 그림과 장소 마스터를 기준 그림으로 함께 넣어 얼굴·의상·공간을 이어 갑니다. 글자는 그림에 넣지 않고 편집에서 얹습니다.",
     "script": "대본을 읽고 작품 정리를 합니다. 엔진은 인물 표기와 장소 세트만 통일하고, 설정 충돌은 '수정 제안'으로 남깁니다. 원고 수정은 감독님이 직접 하고, 고친 원고를 다시 올리면 됩니다.",
     "cast": "인물마다 프로필을 확정하고 얼굴 후보 중 1장을 고릅니다. 장소는 넓은 마스터 1장을 고릅니다. 직접 만든 이미지는 올리기로 넣습니다.",
@@ -799,7 +800,152 @@ elif cur == "still":
         st.session_state["still_ep_next"] = nxt[0]
         st.rerun()
 
-# ===== 05 이후 =====
+# ===== 05 영상 =====
+elif cur == "clip":
+    allcuts = work.get("cuts", {})
+    stills = work.get("stills", {})
+    clips = work.setdefault("clips", {})
+    eps_state = work.setdefault("eps", {})
+    ready = [e["ep"] for e in parsed["episodes"] if eps_state.get(str(e["ep"]), {}).get("still") == "done"]
+    done_n = sum(1 for v in eps_state.values() if v.get("clip") == "done")
+    brief("clip", f"영상 완료 {done_n} / {len(parsed['episodes'])}화")
+    if not ready:
+        st.info("04 스틸에서 모든 컷 그림이 확정된 화가 있어야 합니다.")
+        st.stop()
+    TOKEN = KEYS.get("REPLICATE_API_TOKEN", "")
+    VMODEL = KEYS.get("REPLICATE_VIDEO_MODEL", "") or videogen.DEFAULT_MODEL
+    if not TOKEN:
+        st.warning("Streamlit 시크릿에 REPLICATE_API_TOKEN 을 넣으면 영상 생성 버튼이 열립니다.")
+    known_c = {c["name"] for c in B["characters"]}
+    castdesc = {c: (work.get("cast", {}).get(c, {}).get("prompt_en", "") or c).split(".")[0] for c in known_c}
+
+    todo = [n for n in ready if eps_state.get(str(n), {}).get("clip") != "done"]
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        if "clip_ep_next" in st.session_state:
+            st.session_state["clip_ep"] = st.session_state.pop("clip_ep_next")
+        dflt = st.session_state.get("clip_ep", todo[0] if todo else ready[0])
+        ep_no = st.selectbox("화", ready, index=ready.index(dflt) if dflt in ready else 0, key="clip_ep",
+                             format_func=lambda n: f"EP {n}" + (" ✓" if eps_state.get(str(n), {}).get("clip") == "done" else ""))
+    with c2:
+        mode = st.selectbox("화질", ["standard", "pro"], format_func=lambda m: {"standard": "720p (기본)", "pro": "1080p (비용 높음)"}[m])
+    cuts = allcuts[str(ep_no)]["cuts"]
+    rec = clips.setdefault(str(ep_no), {})
+    srec = stills.get(str(ep_no), {})
+    moving = [c for c in cuts if c["motion"] in ("move", "video")]
+    missing = [c for c in moving if not rec.get(c["id"], {}).get("key")]
+    running = {cid: r["get"] for cid, r in rec.items() if r.get("get") and not r.get("key") and r.get("status") not in videogen.DONE}
+
+    def finish():
+        ok = all(rec.get(c["id"], {}).get("key") for c in moving)
+        eps_state.setdefault(str(ep_no), {})["clip"] = "done" if ok else "doing"
+        save(work)
+
+    def collect(jobs, box):
+        """진행 중인 예측을 끝까지 기다렸다가 영상을 저장소에 넣는다. 창을 닫아도 '결과 불러오기'로 이어 받을 수 있다."""
+        def tick(res):
+            n = sum(1 for r in res.values() if r.get("status") in videogen.DONE)
+            box.update(label=f"영상 {n}/{len(jobs)}개 완료 (컷마다 1~5분)")
+        res = videogen.wait_all(TOKEN, jobs, on_tick=tick)
+        for cid, r in res.items():
+            cell = rec.setdefault(cid, {})
+            cell["status"] = r.get("status")
+            if r.get("status") == "succeeded" and r.get("output"):
+                try:
+                    data = videogen.download(r["output"])
+                except Exception as ex:          # 받기 실패: 예측 번호는 남아 있으니 '결과 불러오기'로 다시
+                    cell["status"] = "processing"
+                    st.error(f"{cid}: 영상 받기 실패 ({ex}). 잠시 뒤 '결과 불러오기'를 누르세요.")
+                    continue
+                k = f"works/{work['id']}/clip/ep{ep_no:03d}/{cid}_{uuid.uuid4().hex[:6]}.mp4"
+                store.put_bytes(k, data, "video/mp4")
+                cell.setdefault("takes", []).append(k)
+                cell["key"] = k
+            elif r.get("status") in ("failed", "canceled"):
+                cell["error"] = str(r.get("error"))[:300]
+        finish()
+
+    def launch(targets):
+        jobs = {}
+        for c, prompt in targets:
+            still = srec.get(c["id"], {}).get("pick")
+            data = img_bytes(still) if still else None
+            if not data:
+                st.error(f"{c['id']}: 확정 스틸이 없습니다")
+                continue
+            try:
+                p = videogen.start(TOKEN, prompt, data, videogen.clip_seconds(c["dur"]), VMODEL, mode)
+            except Exception as ex:
+                st.error(f"{c['id']}: {ex}")
+                continue
+            rec[c["id"]] = {**{k: v for k, v in rec.get(c["id"], {}).items() if k == "takes"},
+                            "pred": p["id"], "get": p["get"], "status": p["status"], "prompt": prompt, "mode": mode, "model": VMODEL}
+            jobs[c["id"]] = p["get"]
+        save(work)                      # 예측 번호를 먼저 저장 (창을 닫아도 이어 받기)
+        return jobs
+
+    with c3:
+        st.write("")
+        if running:
+            if st.button(f"진행 중인 영상 결과 불러오기 ({len(running)}컷)", type="primary", disabled=not TOKEN):
+                with st.status("Replicate 결과 확인 중…") as box:
+                    collect(running, box)
+                    box.update(label="확인 완료", state="complete")
+                st.rerun()
+        else:
+            label = f"EP {ep_no} 영상 만들기 ({len(missing)}컷)" if missing else f"EP {ep_no} 영상 완료 · {len(moving)}컷"
+            if st.button(label, type="primary", disabled=not (TOKEN and missing)):
+                with st.status(f"EP {ep_no} 영상 {len(missing)}개 생성 시작…") as box:
+                    jobs = launch([(c, cutter.video_prompt(c, castdesc)) for c in missing])
+                    if jobs:
+                        collect(jobs, box)
+                    box.update(label="생성 끝", state="complete")
+                st.rerun()
+    st.caption(f"모델 {VMODEL} · 확정 스틸을 첫 프레임으로 씁니다. '짧은 움직임'과 '완전 영상' 컷만 만들고, "
+               "'정지+카메라' 컷은 편집 단계에서 스틸에 카메라 움직임을 넣습니다. 버튼 한 번에 한 화만 진행합니다.")
+
+    cols = st.columns(4)
+    for i, c in enumerate(cuts):
+        cell = rec.get(c["id"], {})
+        with cols[i % 4]:
+            st.markdown(f"<div class='cut'><div class='h'>{c['id']} · {c['size']}<span class='d'>{c['dur']}s</span> "
+                        f"<span class='tag {'mv' if c['motion'] == 'video' else 'ok'}'>{cutter.MOTIONS[c['motion']]}</span></div>"
+                        f"<div class='s'>{c['action']}</div></div>", unsafe_allow_html=True)
+            if c["motion"] == "still":
+                d = img_bytes(srec.get(c["id"], {}).get("pick", "")) if srec.get(c["id"], {}).get("pick") else None
+                if d:
+                    st.image(d, width="stretch")
+                st.caption("편집에서 카메라 움직임만 넣습니다")
+                continue
+            if cell.get("key"):
+                v = img_bytes(cell["key"])
+                if v:
+                    st.video(v)
+            elif cell.get("status") and cell["status"] not in videogen.DONE:
+                st.markdown('<span class="tag todo">생성 중</span>', unsafe_allow_html=True)
+            elif cell.get("error"):
+                st.markdown(f'<span class="tag fix">실패</span> <span class="small">{cell["error"]}</span>', unsafe_allow_html=True)
+            takes = [k for k in cell.get("takes", []) if k != cell.get("key")]
+            for k in takes[-2:]:
+                if st.button("이전 테이크로", key=f"vtk_{k}"):
+                    cell["key"] = k
+                    finish()
+                    st.rerun()
+            with st.expander("지시문 · 다시 만들기"):
+                p2 = st.text_area("지시문", cell.get("prompt") or cutter.video_prompt(c, castdesc), key=f"vp_{c['id']}",
+                                  height=150, label_visibility="collapsed")
+                if st.button("이 컷 다시", key=f"vre_{c['id']}", disabled=not TOKEN or bool(running)):
+                    with st.status(f"{c['id']} 다시 만드는 중… (1~5분)") as box:
+                        jobs = launch([(c, p2)])
+                        if jobs:
+                            collect(jobs, box)
+                    st.rerun()
+    nxt = [n for n in todo if n != ep_no]
+    if eps_state.get(str(ep_no), {}).get("clip") == "done" and nxt and st.button(f"다음 화로 (EP {nxt[0]})"):
+        st.session_state["clip_ep_next"] = nxt[0]
+        st.rerun()
+
+# ===== 06 이후 =====
 else:
     brief(cur, "다음 버전")
-    st.info("지금 버전은 대본 · 작품 정리 · 캐스팅 · 컷 분할 · 스틸까지입니다. 다음: 05 영상 → 06 더빙 → 07 자막·사운드 → 08 편집 → 09 마스터.")
+    st.info("지금 버전은 대본 · 작품 정리 · 캐스팅 · 컷 분할 · 스틸 · 영상까지입니다. 다음: 06 더빙 → 07 자막·사운드 → 08 편집 → 09 마스터.")
