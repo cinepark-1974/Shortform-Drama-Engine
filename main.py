@@ -197,12 +197,15 @@ with st.sidebar:
     st.markdown("### 작품")
     works = store.works()
     labels = ["＋ 새 작품"] + [f"{w['title']}  ·  {w['id']}" for w in works]
+    if "wid" not in st.session_state and works:      # 앱을 새로 열면 마지막으로 저장한 작품을 바로 연다
+        st.session_state["wid"] = works[0]["id"]
     idx = 0
     for i, w in enumerate(works, start=1):
         if w["id"] == st.session_state.get("wid"):
             idx = i
     sel = st.selectbox("작품 선택", labels, index=idx, label_visibility="collapsed")
     st.session_state["wid"] = None if sel == "＋ 새 작품" else sel.rsplit("·", 1)[-1].strip()
+    st.caption("저장은 자동입니다. 대본·작품 정리·캐스팅·컷은 만들거나 고르는 즉시 저장소에 저장되고, 앱을 다시 열면 마지막 작품이 열립니다.")
     st.markdown("### 연결 상태")
     for k, label in [("OPENAI_API_KEY", "그림 · gpt-image-2"), ("ANTHROPIC_API_KEY", "정리·컷 · Claude"),
                      ("ELEVENLABS_API_KEY", "더빙 · ElevenLabs"), ("REPLICATE_API_TOKEN", "영상 · Replicate")]:
