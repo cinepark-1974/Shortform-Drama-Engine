@@ -28,12 +28,18 @@ NEG = (" No beauty filter, no airbrushing, no plastic skin, no waxy skin, no CGI
 STYLES = {
     # 02 캐스팅 인물 기준 그림: 스튜디오 프로필 사진. 감정·장면은 넣지 않되, 화보처럼 매끈하지 않게
     # 작품 전체 톤(필름 색, 자연광)에 맞춘 자연스러운 사진으로.
-    "ref": ("A real profile photograph of a Korean drama lead actor with an attractive, camera-friendly face: "
-            "clear bright eyes, well-defined features, fresh youthful look, light natural makeup. " + SKIN,
-            " Plain light grey seamless backdrop. Soft window daylight from one side with a gentle real shadow "
-            "on the other side of the face, no flat studio flash. Calm neutral face, mouth closed, relaxed shoulders, "
-            "a natural candid feel instead of a posed fashion look. Medium-format film photograph, Kodak Portra 160 color, "
-            "fine organic film grain, soft highlight roll-off." + NEG),
+    "ref": ("SUBJECT & IDENTITY: An ultra-photorealistic studio portrait for a Korean drama casting file, "
+            "a lead-role actor with an attractive, camera-friendly face. " + SKIN,
+            " HAIR & FABRIC: individual hair fibers visible with realistic density, uneven highlights and naturally separated "
+            "strands; real knit and fabric texture that follows the body with gentle tension and soft folds. "
+            "POSE & COMPOSITION: front-facing, eye-level camera, relaxed shoulders, arms resting naturally at the sides, "
+            "direct eye contact with the camera. Vertical 3:4 framing from the top of the head to the upper hips. "
+            "Neutral bright grey seamless studio background. "
+            "LIGHTING & PHOTOGRAPHY: soft diffused studio light with gentle directional shadows, natural skin highlights and "
+            "real dimensionality without heavy beauty retouching. 85mm portrait lens, realistic depth of field, natural "
+            "optical rendering, fine photographic grain, accurate skin and fabric texture, natural color grading." + NEG +
+            " No artificial hair clumps, no plastic hair shine, no exaggerated anatomy, no distorted facial features, "
+            "no unnatural fabric deformation."),
     # 02 캐스팅 장소 마스터: 사람 없는 넓은 공간.
     "location": ("A real wide photograph of an empty location in Seoul, scouted for a Korean drama. ",
                  " Natural daylight with real shadows and uneven exposure, lived-in details, eye-level lens. "
