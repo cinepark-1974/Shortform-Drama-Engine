@@ -350,10 +350,10 @@ elif cur == "cast":
     t_char, t_loc = st.tabs(["인물", "장소 (마스터)"])
     stt = bb.stats(B, parsed)
 
-    def gen_many(prompts, aspect):
+    def gen_many(prompts, aspect, style="ref"):
         def one(p):
             try:
-                return imagegen.generate(KEYS["OPENAI_API_KEY"], p, aspect, quality)
+                return imagegen.generate(KEYS["OPENAI_API_KEY"], p, aspect, quality, style=style)
             except Exception as ex:
                 return ex
         with ThreadPoolExecutor(4) as ex:
@@ -375,7 +375,7 @@ elif cur == "cast":
             upf = st.file_uploader("직접 올리기", type=["png", "jpg", "jpeg", "webp"], key=f"u_{kind}_{key}", label_visibility="collapsed")
         if go:
             with st.status(f"{label} 후보 {n_cand}장 생성 중… (장당 30초~1분)") as s:
-                for r in gen_many([prompt] * n_cand, aspect):
+                for r in gen_many([prompt] * n_cand, aspect, "ref" if kind == "cast" else "location"):
                     if isinstance(r, Exception):
                         st.error(str(r))
                         continue

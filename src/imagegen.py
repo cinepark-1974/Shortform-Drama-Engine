@@ -15,11 +15,31 @@ import requests
 MODEL = "gpt-image-2"
 SIZES = {"9:16": "864x1536", "16:9": "1536x864", "1:1": "1024x1024", "3:4": "1024x1360"}
 
-# 화면 톤 기준 (Mr. MOON 예시 5장에서 뽑은 규칙). 확정형 문장만 쓴다.
-PHOTO_HEAD = ("A real photograph taken on the set of a contemporary Korean TV drama. "
-              "Natural skin texture with visible pores, no retouching, no plastic smoothness. ")
-PHOTO_TAIL = (" Soft natural daylight from a window. Shallow depth of field. Muted colors. "
-              "No text, no letters, no logo, no watermark anywhere in the image.")
+# 화면 톤 기준. 확정형 문장만 쓴다.
+# 실사 질감 규칙은 Mr. MOON 참고 프롬프트(스트리트 포토, 2026-11-10)에서 가져옴: 피부 결, 필름 색, 자연광, 금지 목록.
+# 참고 프롬프트의 워터마크 문구는 다른 사람의 표식이라 넣지 않는다.
+SKIN = ("Real human skin with visible pores, faint redness on the cheeks, tiny natural blemishes, "
+        "natural facial asymmetry and real expression lines. Believable anatomy and natural facial proportions. ")
+NEG = (" No beauty filter, no airbrushing, no plastic skin, no waxy skin, no CGI look, no 3D render look, "
+       "no HDR, no oversharpening, no exaggerated features. "
+       "No text, no letters, no logo, no watermark anywhere in the image.")
+STYLES = {
+    # 02 캐스팅 인물 기준 그림: 배우 프로필 사진. 감정·장면은 넣지 않는다.
+    "ref": ("A real studio profile photograph of an actor for a Korean drama casting file. " + SKIN,
+            " Plain light grey seamless backdrop, soft even studio light, calm neutral face, mouth closed. "
+            "Photographed on a medium-format camera, true-to-life color, fine film grain." + NEG),
+    # 02 캐스팅 장소 마스터: 사람 없는 넓은 공간.
+    "location": ("A real wide photograph of an empty location in Seoul, scouted for a Korean drama. ",
+                 " Natural daylight with real shadows and uneven exposure, lived-in details, eye-level lens. "
+                 "Medium-format film look with Kodak Portra 160 color, fine grain and soft highlight roll-off." + NEG),
+    # 04 스틸 컷: 촬영장에서 찍힌 한 순간.
+    "cut": ("A real frame captured on the set of a contemporary Korean drama, an unposed split-second moment. " + SKIN,
+            " Real daylight mixing soft and hard light, true shadows under the chin and nose, uneven exposure. "
+            "Shallow depth of field with a soft out-of-focus foreground object at the frame edge. "
+            "Medium-format film look with Kodak Portra 160 color, visible organic film grain, soft highlight roll-off "
+            "and a faint vignette. Imperfect natural framing with the subject off center." + NEG),
+}
+PHOTO_HEAD, PHOTO_TAIL = STYLES["cut"]   # 예전 이름 호환
 
 # 이미지 지시문 금지어 (3 MINUTES 콘솔 BANNED 규칙 계승)
 BANNED = [("살짝", "확정 표현으로"), ("약간", "확정 표현으로"), ("정도", "확정 표현으로"), ("또는", "하나만"),
@@ -33,10 +53,12 @@ def banned_in(text: str) -> list[str]:
     return [f"'{w.strip()}' → {why}" for w, why in BANNED if w in t]
 
 
-def generate(key: str, prompt: str, aspect: str = "9:16", quality: str = "medium", photo: bool = True) -> bytes:
-    """그림 한 장 → JPG 바이트."""
+def generate(key: str, prompt: str, aspect: str = "9:16", quality: str = "medium", photo: bool = True,
+             style: str = "cut") -> bytes:
+    """그림 한 장 → JPG 바이트. style: ref(인물 기준) / location(장소 마스터) / cut(스틸 컷)."""
     from PIL import Image
-    full = (PHOTO_HEAD + prompt + PHOTO_TAIL) if photo else prompt
+    head, tail = STYLES.get(style, STYLES["cut"])
+    full = (head + prompt + tail) if photo else prompt
     body = {"model": MODEL, "prompt": full[:30000], "size": SIZES.get(aspect, SIZES["9:16"]),
             "quality": quality or "medium", "n": 1}
     r = None
