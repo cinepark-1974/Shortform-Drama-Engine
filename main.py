@@ -212,17 +212,21 @@ def progress(work: dict) -> dict:
     streak = next((i for i, l in enumerate(levels) if l < 7), n_ep)       # EP1부터 끊김 없이 완성된 화 수
     binge_total = -(-n_ep // BINGE)
     binge_ready = sum(1 for g in range(binge_total) if all(l == 7 for l in levels[g * BINGE:(g + 1) * BINGE]))
+    left, nk, nep = [], "script", None
     if not work.get("bible"):
         nxt = "01 대본에서 작품 정리"
     elif b and a < b:
+        nk = "cast"
+        left = [c for c in chars_ranked(work)[: work.get("main_n", 6)] if not work.get("cast", {}).get(c, {}).get("pick")] + \
+               [l["name"] for l in locs_ranked(work)[: work.get("loc_n", 8)] if not work.get("loc", {}).get(l["id"], {}).get("pick")]
         nxt = f"02 캐스팅 ({a}/{b} 확정)"
     elif streak < n_ep:
-        k = EP_STAGES[levels[streak]]
-        nxt = f"EP {streak + 1} · " + next(f"{n} {t}" for kk, n, t, d in STAGES if kk == k)
+        nk, nep = EP_STAGES[levels[streak]], streak + 1
+        nxt = f"EP {nep} · " + next(f"{n} {t}" for kk, n, t, d in STAGES if kk == nk)
     else:
-        nxt = "전 화 완성"
+        nk, nxt = "master", "전 화 완성"
     return {"pct": min(pct, 100), "levels": levels, "done": done, "streak": streak, "n": n_ep,
-            "binge": (binge_ready, binge_total), "next": nxt}
+            "binge": (binge_ready, binge_total), "next": nxt, "next_stage": nk, "next_ep": nep, "left": left}
 
 
 def heatmap(work: dict, levels: list[int], big: bool = False) -> str:
@@ -256,6 +260,33 @@ def overview(work: dict):
             + f'</div><div class="next">지금 할 일 <em>{p["next"]}</em></div>'
             + heatmap(work, p["levels"]) + '</div>')
     st.markdown(html, unsafe_allow_html=True)
+    go_bar(p)
+
+
+def stage_label(k: str) -> str:
+    return next(f"{n} {t}" for kk, n, t, d in STAGES if kk == k)
+
+
+def jump(k: str, ep: int | None = None):
+    """다음 실행에서 단계(와 화)를 바꿔 띄운다. 위젯이 그려지기 전에 적용된다."""
+    st.session_state["stage_jump"] = stage_label(k)
+    if ep:
+        st.session_state[{"cut": "cut_ep_next", "still": "still_ep_next", "clip": "clip_ep_next"}.get(k, "_ep")] = ep
+    st.rerun()
+
+
+def go_bar(p: dict, key: str = "go_next"):
+    """지금 할 일 안내 + 그 자리로 가는 버튼. 다른 단계에 있으면 노란 버튼으로 데려간다."""
+    here = st.session_state.get("stage_pick", stage_label("script"))
+    target = stage_label(p["next_stage"])
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        if p["left"]:
+            names = ", ".join(p["left"][:8]) + (f" 외 {len(p['left']) - 8}" if len(p["left"]) > 8 else "")
+            st.caption(f"확정이 남은 칸: {names} · 인물 수·장소 수 막대를 줄이면 바로 다음 단계가 열립니다.")
+    with c2:
+        if here != target and st.button(f"지금 할 일로 → {target}", type="primary", key=key, width="stretch"):
+            jump(p["next_stage"], p["next_ep"])
 
 
 def locked(work, k) -> bool:
@@ -354,6 +385,8 @@ if not work:
 
 # ───────── 작품 화면 ─────────
 header(work)
+if "stage_jump" in st.session_state:          # '지금 할 일로' 버튼: 단계 선택을 위젯이 그려지기 전에 바꿈
+    st.session_state["stage_pick"] = st.session_state.pop("stage_jump")
 overview(work)
 stage = st.radio("단계", [f"{n} {t}" for k, n, t, d in STAGES], horizontal=True, label_visibility="collapsed", key="stage_pick")
 cur = next(k for k, n, t, d in STAGES if stage.startswith(n))
@@ -973,3 +1006,9 @@ elif cur == "clip":
 else:
     brief(cur, "다음 버전")
     st.info("지금 버전은 대본 · 작품 정리 · 캐스팅 · 컷 분할 · 스틸 · 영상까지입니다. 다음: 06 더빙 → 07 자막·사운드 → 08 편집 → 09 마스터.")
+
+# ───────── 화면 맨 아래: 다음 할 일 안내 ─────────
+st.divider()
+_p = progress(work)
+st.markdown(f"<div class='small'>다음 할 일 · <b>{_p['next']}</b></div>", unsafe_allow_html=True)
+go_bar(_p, key="go_next_bottom")
