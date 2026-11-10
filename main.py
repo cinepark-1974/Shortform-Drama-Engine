@@ -472,11 +472,24 @@ elif cur == "cast":
 
     def asset_board(kind, key, label, info, aspect, n_cand):
         base = f"works/{work['id']}/{kind}/{slug(key)}"
-        prompt = st.text_area("이미지 지시문 (영어, 확정형)", info.get("prompt_en", ""), key=f"p_{kind}_{key}", height=110)
+        stored = info.get("prompt_en") or info.get("prompt") or info.get("image_prompt") or ""
+        if not stored.strip() and (info.get("look_ko") or info.get("desc_ko")):
+            st.markdown('<span class="tag todo">영어 지시문 없음</span> <span class="small">아래 버튼으로 이 칸만 다시 씁니다.</span>', unsafe_allow_html=True)
+            if st.button("영어 지시문 쓰기 (Claude)", key=f"re_{kind}_{key}", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
+                with st.spinner("한국어 설명을 영어 지시문으로 옮기는 중…"):
+                    stored = profiles.to_prompt(KEYS["ANTHROPIC_API_KEY"], kind, label, info, MODEL)
+                if stored:
+                    info["prompt_en"] = stored
+                    save(work)
+                    st.rerun()
+        # 입력칸 이름에 저장된 지시문의 지문을 붙여, 저장값이 바뀌면 칸이 새로 그려지게 함 (빈 칸이 남는 문제 방지)
+        import hashlib
+        fp = hashlib.md5(stored.encode()).hexdigest()[:8]
+        prompt = st.text_area("이미지 지시문 (영어, 확정형)", stored, key=f"p_{kind}_{key}_{fp}", height=110)
         bad = imagegen.banned_in(prompt)
         if bad:
             st.markdown(f'<span class="tag fix">금지어</span> {" · ".join(bad)}', unsafe_allow_html=True)
-        if prompt != info.get("prompt_en", "") and prompt.strip():
+        if prompt != stored and prompt.strip():
             info["prompt_en"] = prompt
             save(work)
         c1, c2 = st.columns([1, 2])

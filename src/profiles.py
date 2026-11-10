@@ -61,4 +61,26 @@ def draft(api_key: str, parsed: dict, names: list[str], places, model: str = "",
                           messages=[{"role": "user", "content": excerpt(parsed, names, places, bible=bible)}])
     txt = "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
     data = json.loads(repair_json(txt))
-    return data if isinstance(data, dict) else {}
+    data = data if isinstance(data, dict) else {}
+    for group in ("characters", "locations"):          # 키 이름이 조금 달라도 prompt_en 으로 맞춤
+        for it in data.get(group, []) or []:
+            if isinstance(it, dict) and not it.get("prompt_en"):
+                it["prompt_en"] = it.get("prompt") or it.get("image_prompt") or it.get("promptEn") or ""
+    return data
+
+
+def to_prompt(api_key: str, kind: str, name: str, info: dict, model: str = "") -> str:
+    """한국어 외모·의상(또는 장소 설명) → 이미지 지시문 영어 한 문단. 칸 하나만 다시 쓸 때."""
+    import anthropic
+    if kind == "cast":
+        src = f"인물 {name}, 나이 {info.get('age','')}. 외모: {info.get('look_ko','')} 의상: {info.get('outfit_ko','')}"
+        rule = ("정면 상반신, 눈높이 카메라, 차분한 무표정, 밝은 회색 무지 배경. 배경·조명·필름 질감 문장은 쓰지 않음(엔진이 붙임). "
+                "'beautiful', 'stunning', 'flawless', 'slightly', 'or' 금지.")
+    else:
+        src = f"장소 {name}. {info.get('desc_ko','')}"
+        rule = "사람 없는 넓은 마스터 샷, 눈높이. 'slightly', 'or' 금지."
+    c = anthropic.Anthropic(api_key=api_key)
+    r = c.messages.create(model=model or DEFAULT_MODEL, max_tokens=800,
+                          system="이미지 생성용 영어 지시문 한 문단만 출력합니다. 확정형, 한 가지 상태만. 설명이나 따옴표 없이 본문만. " + rule,
+                          messages=[{"role": "user", "content": src}])
+    return "".join(b.text for b in r.content if getattr(b, "type", "") == "text").strip().strip('"')
