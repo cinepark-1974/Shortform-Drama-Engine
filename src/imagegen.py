@@ -24,10 +24,15 @@ NEG = (" No beauty filter, no airbrushing, no plastic skin, no waxy skin, no CGI
        "no HDR, no oversharpening, no exaggerated features. "
        "No text, no letters, no logo, no watermark anywhere in the image.")
 STYLES = {
-    # 02 캐스팅 인물 기준 그림: 배우 프로필 사진. 감정·장면은 넣지 않는다.
-    "ref": ("A real studio profile photograph of an actor for a Korean drama casting file. " + SKIN,
-            " Plain light grey seamless backdrop, soft even studio light, calm neutral face, mouth closed. "
-            "Photographed on a medium-format camera, true-to-life color, fine film grain." + NEG),
+    # 02 캐스팅 인물 기준 그림: 길에서 우연히 찍힌 필름 사진 느낌(Mr. MOON 참고 프롬프트 톤).
+    # 기준 그림이므로 얼굴은 가리지 않고 정면에 가깝게, 배경은 흐리게.
+    "ref": ("An unposed candid street photograph of a person in Seoul, taken by a passerby in a split second. " + SKIN,
+            " The face is fully visible and unobstructed, turned toward the camera with a natural unguarded expression. "
+            "Bright midday sunlight mixing soft and hard light, real shadows under the chin, subtle highlights on the hair, "
+            "uneven exposure. Background is a soft blurred Seoul sidewalk. Shallow depth of field, a soft out-of-focus "
+            "foreground element at one edge of the frame that never covers the face. Medium-format film photograph, "
+            "Kodak Portra 160 color, visible organic film grain, soft highlight roll-off, faint vignette. "
+            "Feels like an accidental frame from an independent street-photography magazine." + NEG),
     # 02 캐스팅 장소 마스터: 사람 없는 넓은 공간.
     "location": ("A real wide photograph of an empty location in Seoul, scouted for a Korean drama. ",
                  " Natural daylight with real shadows and uneven exposure, lived-in details, eye-level lens. "
