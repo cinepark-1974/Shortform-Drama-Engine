@@ -623,19 +623,34 @@ elif cur == "cast":
         need = [l for l in locs if not work.get("loc", {}).get(l["id"], {}).get("prompt_en")]
         if need and st.button(f"장소 지시문 초안 ({len(need)}곳, Claude)", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
             with st.spinner("장면 머리에서 공간을 읽는 중…"):
-                slugs = {l["name"]: [f"EP{e['ep']} {s['slug']}" for e in parsed["episodes"] for s in e["scenes"]
+                slugs = {f'{l["id"]} {l["name"]}': [f"EP{e['ep']} {s['slug']}" for e in parsed["episodes"] for s in e["scenes"]
                                      if B["scene_loc"].get(f"{e['ep']}-{s['no']}") == l["id"]][:5] for l in need}
                 d = profiles.draft(KEYS["ANTHROPIC_API_KEY"], parsed, [], slugs, MODEL, B)
-            byname = {l["name"]: l["id"] for l in need}
-            for l in d.get("locations", []):
-                if l.get("name") in byname:
-                    work.setdefault("loc", {}).setdefault(byname[l["name"]], {}).update(l)
-                    st.session_state.pop(f"p_loc_{byname[l['name']]}", None)
+            got = [x for x in d.get("locations", []) if isinstance(x, dict) and x.get("prompt_en")]
+
+            def match(x, i):
+                """돌아온 이름 → 장소 id: id 가 들어 있으면 id, 이름이 겹치면 이름, 아니면 순서대로."""
+                nm = str(x.get("name", "")) + " " + str(x.get("id", ""))
+                for l in need:
+                    if l["id"] in nm:
+                        return l["id"]
+                for l in need:
+                    a, b = l["name"].replace(" ", ""), nm.replace(" ", "")
+                    if a in b or (b.strip() and b.strip() in a):
+                        return l["id"]
+                return need[i]["id"] if i < len(need) and len(got) == len(need) else None
+            for i, x in enumerate(got):
+                lid = match(x, i)
+                if lid:
+                    work.setdefault("loc", {}).setdefault(lid, {}).update({k: v for k, v in x.items() if k != "name"})
+            if not got:
+                st.error("지시문을 받지 못했습니다. 한 번 더 누르거나 장소마다 '영어 지시문 쓰기'를 쓰세요.")
             save(work)
             st.rerun()
         st.caption("장소마다 넓은 마스터 1장을 확정합니다. 같은 장소의 모든 컷은 이 마스터에서 만듭니다.")
         for l in locs:
             info = work.setdefault("loc", {}).setdefault(l["id"], {})
+            info.setdefault("desc_ko", l.get("desc", ""))     # 영어 지시문이 비었을 때 이 설명으로 바로 쓸 수 있게
             with st.expander(f"{'✓ ' if info.get('pick') else ''}{l['id']} {l['name']} · 장면 {stt['loc'].get(l['id'], 0)}개", expanded=not info.get("pick")):
                 st.markdown(f"<div class='small'>{l.get('desc','')}</div>", unsafe_allow_html=True)
                 asset_board("loc", l["id"], l["name"], info, "16:9", 2)
