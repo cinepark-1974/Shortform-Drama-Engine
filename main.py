@@ -156,6 +156,14 @@ def locs_ranked(work: dict) -> list[dict]:
     return sorted(b["locations"], key=lambda l: -n.get(l["id"], 0))
 
 
+def cast_locs(work: dict) -> list[dict]:
+    """캐스팅할 장소: 장면 많은 순 상위 loc_n 곳 + 감독님이 따로 추가한 곳(loc_extra)."""
+    allr = locs_ranked(work)
+    top = allr[: work.get("loc_n", 8)]
+    ids = {l["id"] for l in top}
+    return top + [l for l in allr if l["id"] in work.get("loc_extra", []) and l["id"] not in ids]
+
+
 def stage_counts(work: dict | None) -> dict:
     out = {k: (0, 0) for k, *_ in STAGES}
     if not work:
@@ -164,7 +172,7 @@ def stage_counts(work: dict | None) -> dict:
     out["script"] = (1 if work.get("bible") else 0, 1)
     if work.get("bible"):
         chars = chars_ranked(work)[: work.get("main_n", 6)]
-        locs = locs_ranked(work)[: work.get("loc_n", 8)]
+        locs = cast_locs(work)
         done = sum(1 for c in chars if work.get("cast", {}).get(c, {}).get("pick")) + \
             sum(1 for l in locs if work.get("loc", {}).get(l["id"], {}).get("pick"))
         out["cast"] = (done, len(chars) + len(locs))
@@ -177,7 +185,7 @@ def stage_counts(work: dict | None) -> dict:
 def cast_split(work: dict) -> str:
     """캐스팅 칸 수를 인물·장소로 나눠 보여 준다 (예: 인물 5/13 · 장소 8/8)."""
     chars = chars_ranked(work)[: work.get("main_n", 6)]
-    locs = locs_ranked(work)[: work.get("loc_n", 8)]
+    locs = cast_locs(work)
     a = sum(1 for c in chars if work.get("cast", {}).get(c, {}).get("pick"))
     b = sum(1 for l in locs if work.get("loc", {}).get(l["id"], {}).get("pick"))
     return f"인물 {a}/{len(chars)} · 장소 {b}/{len(locs)}"
@@ -227,7 +235,7 @@ def progress(work: dict) -> dict:
     elif b and a < b:
         nk = "cast"
         left = [c for c in chars_ranked(work)[: work.get("main_n", 6)] if not work.get("cast", {}).get(c, {}).get("pick")] + \
-               [l["name"] for l in locs_ranked(work)[: work.get("loc_n", 8)] if not work.get("loc", {}).get(l["id"], {}).get("pick")]
+               [l["name"] for l in cast_locs(work) if not work.get("loc", {}).get(l["id"], {}).get("pick")]
         nxt = f"02 캐스팅 ({cast_split(work)} 확정)"
     elif streak < n_ep:
         nk, nep = EP_STAGES[levels[streak]], streak + 1
@@ -653,7 +661,16 @@ elif cur == "cast":
         if loc_n != work.get("loc_n"):
             work["loc_n"] = loc_n
             save(work)
-        locs = locs_all[:loc_n]
+        rest = [l for l in locs_all[loc_n:]]
+        if "loc_extra_ms" not in st.session_state:
+            st.session_state["loc_extra_ms"] = [i for i in work.get("loc_extra", []) if i in {l["id"] for l in rest}]
+        extra = st.multiselect("장소 따로 추가 (장면이 적어도 마스터가 필요한 곳)", [l["id"] for l in rest], key="loc_extra_ms",
+                               format_func=lambda i: f'{i} {next(l["name"] for l in locs_all if l["id"] == i)} · 장면 {stt["loc"].get(i, 0)}개',
+                               placeholder="예: 1화의 회사 소회의실")
+        if extra != work.get("loc_extra", []):
+            work["loc_extra"] = extra
+            save(work)
+        locs = cast_locs(work)
         need = [l for l in locs if not work.get("loc", {}).get(l["id"], {}).get("prompt_en")]
         if need and st.button(f"장소 지시문 초안 ({len(need)}곳, Claude)", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
             with st.spinner("장면 머리에서 공간을 읽는 중…"):
