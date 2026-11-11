@@ -455,6 +455,25 @@ if cur == "script":
                 st.markdown(f"#### 장소 세트 {len(B['locations'])}곳 <span class='small'>장면 머리 {len(summ['places'])}가지 → 세트 {len(B['locations'])}곳</span>", unsafe_allow_html=True)
                 st.dataframe([{"id": l["id"], "세트": l["name"], "장면": stt["loc"].get(l["id"], 0), "공간": l.get("desc", "")}
                               for l in sorted(B["locations"], key=lambda l: -stt["loc"].get(l["id"], 0))], hide_index=True, width="stretch")
+                with st.expander("세트 합치기 (같은 공간으로 쓰기)"):
+                    st.caption("예: 세영의 아파트 거실을 세영의 원룸으로 합치면, 아파트로 적힌 장면도 모두 원룸 세트로 만듭니다. 대본 문장은 바뀌지 않습니다.")
+                    lab = {l["id"]: f'{l["id"]} {l["name"]} · 장면 {stt["loc"].get(l["id"], 0)}' for l in B["locations"]}
+                    ids = sorted(lab, key=lambda i: -stt["loc"].get(i, 0))
+                    m1, m2 = st.columns(2)
+                    src = m1.selectbox("없앨 세트", ids, index=None, placeholder="고르세요", format_func=lab.get, key="mg_src")
+                    dst = m2.selectbox("합칠 곳", ids, index=None, placeholder="고르세요", format_func=lab.get, key="mg_dst")
+                    if st.button(f"{src or '?'} → {dst or '?'} 합치기", disabled=not (src and dst) or src == dst):
+                        for k, v in list(B["scene_loc"].items()):
+                            if v == src:
+                                B["scene_loc"][k] = dst
+                        B["locations"] = [l for l in B["locations"] if l["id"] != src]
+                        B.setdefault("merged", []).append({"from": src, "to": dst, "at": now()})
+                        if src in work.get("loc", {}):
+                            work["loc"].pop(src)
+                        work["bible"] = B
+                        save(work)
+                        st.success(f"{src} 장면을 모두 {dst} 로 옮겼습니다.")
+                        st.rerun()
 
     with t_board:
         p = progress(work)
