@@ -519,6 +519,21 @@ elif cur == "cast":
     chars_all, locs_all = chars_ranked(work), locs_ranked(work)
     a, b = stage_counts(work)["cast"]
     brief("cast", f"확정 {cast_split(work)}" + (" · 캐스팅 완료" if b and a >= b else ""))
+    picks = [(f"CAST_FINAL/{c}_ref_front.jpg", v["pick"]) for c, v in work.get("cast", {}).items() if v.get("pick")] + \
+            [(f"LOCATION_MASTER/{lid}_{next((l['name'] for l in B['locations'] if l['id'] == lid), '')}_master.jpg", v["pick"])
+             for lid, v in work.get("loc", {}).items() if v.get("pick")]
+    if picks:
+        def _zip():
+            import io, re, zipfile
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+                for name, k in picks:
+                    d = img_bytes(k)
+                    if d:
+                        z.writestr(re.sub(r'[\\:*?"<>|·]', "_", name).replace(" ", "_"), d)
+            return buf.getvalue()
+        st.download_button(f"확정 그림 {len(picks)}장 내려받기 (드라이브용 이름 정리, zip)", _zip, file_name=f"casting_{work['id']}.zip",
+                           mime="application/zip", help="CAST_FINAL·LOCATION_MASTER 폴더로 나뉘고, 이름이 '인물_ref_front', '장소번호_장소_master' 로 정리됩니다. 압축을 풀어 드라이브 작업 폴더에 그대로 올리면 됩니다.")
     t_char, t_loc = st.tabs(["인물", "장소 (마스터)"])
     stt = bb.stats(B, parsed)
 
