@@ -21,8 +21,8 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 SIDE = 768
 
 ITEMS = {
-    "subject": "지시문에 적힌 대상(인물·사물·화면)이 모두 그림에 있다",
-    "action": "지시문의 동작·자세와 그림의 동작이 같다",
+    "subject": "첫 장면에 적힌 대상(인물·사물·화면)이 모두 그림에 있다",
+    "action": "첫 장면의 자세·시선·손에 든 것이 그림과 같고, 물건이 몸이나 기계에 파묻히는 등 물리적으로 말이 안 되는 곳이 없다",
     "props": "몸에 거는 소품이 없다 (사원증·출입증·방문증 목걸이, 명찰, 귀걸이·목걸이·반지·팔찌·시계, 머리핀, 이어폰, 글자·로고 있는 옷)",
     "identity": "기준 그림의 인물과 같은 사람이다 (얼굴, 머리 모양, 앞머리, 옷 색·종류)",
     "text": "그림 안에 글자·숫자·로고가 생기지 않았다 (빈 화면·빈 종이는 합격)",
@@ -34,7 +34,7 @@ CLIP_ITEMS = {
     "text": "화면에 글자·자막·로고가 생기지 않았다",
     "anatomy": "손가락·팔·얼굴이 뭉개지거나 녹지 않았다",
     "lips": "말하지 않는 컷에서 입을 크게 움직이지 않는다",
-    "action": "지시문의 동작이 일어난다 (정지된 채로 끝나거나 엉뚱한 동작이 아니다)",
+    "action": "'일어나야 할 움직임'이 일어난다 (정지된 채로 끝나거나 엉뚱한 동작이 아니다)",
 }
 
 # 검수 응답에 고치는 문장(fix_en)이 비었을 때 항목별로 붙이는 기본 문장
@@ -127,7 +127,8 @@ def judge_still(api_key: str, still: bytes, refs: list[tuple[str, bytes]], cut: 
     refs = [(이름, 바이트)] 인물 확정 그림·장소 마스터 (스틸 생성 때 넣은 것과 같은 것)."""
     d = cut.get("dialogue")
     head = (f"[컷 {cut.get('id')}] {cut.get('size')} · {cut.get('angle')}\n"
-            f"행동: {cut.get('action')}\n영어: {cut.get('action_en')}\n"
+            f"첫 장면(이 그림이 보여 줘야 할 정지 상태): {cut.get('frame_ko') or cut.get('action')}\n"
+            f"영어: {cut.get('frame_en') or cut.get('action_en')}\n"
             f"화면에 보이는 인물: {', '.join(cut.get('chars') or []) or '없음'}\n"
             + (f"화면 글자(편집에서 얹음, 그림엔 빈 화면): {cut['screen_text']}\n" if cut.get("screen_text") else "")
             + (f"대사: {d['who']} {d['text']}\n" if d else "")
@@ -169,7 +170,9 @@ def judge_clip(api_key: str, video: bytes, still: bytes, cut: dict, prompt: str,
     fr = frames(video)
     if len(fr) < 2:
         return {"pass": True, "items": {}, "fails": [], "note": "장면 추출 실패로 검수 생략"}
-    head = (f"[컷 {cut.get('id')}] 움직임: {cut.get('motion')}\n행동: {cut.get('action')}\n영어: {cut.get('action_en')}\n"
+    head = (f"[컷 {cut.get('id')}] 움직임 종류: {cut.get('motion')}\n"
+            f"첫 장면: {cut.get('frame_ko') or cut.get('action')}\n"
+            f"일어나야 할 움직임: {cut.get('motion_ko') or cut.get('motion_en') or cut.get('action')}\n"
             f"대사: {'있음 (목소리는 편집에서, 입은 다문 채)' if cut.get('dialogue') else '없음'}\n"
             "\n검수 항목:\n" + "\n".join(f"- {k}: {v}" for k, v in CLIP_ITEMS.items())
             + f"\n\n영상 지시문(참고):\n{prompt[:2000]}")

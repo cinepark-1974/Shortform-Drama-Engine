@@ -29,6 +29,7 @@ DUR_MIN, DUR_MAX = 1.5, 4.0    # 보통 컷 길이
 STILL_MAX = 3.0                # 정지+카메라 컷 최대 길이 (3초를 넘으면 PPT처럼 보이기 시작)
 HOLD_MAX = 6.0                 # 버티기 컷(클라이맥스) 최대 길이
 TALK_MAX = 2.5                 # 말하는 얼굴이 보이는 컷 최대 길이 (립싱크 없음)
+FLOW_WORDS = re.compile(r"(하고\s|고서|면서|다가|하자|열리자|되자|며\s|고\s?(들어|나가|나서|걸어|돌아|일어|앉|뛰|달려|떠나))")   # 첫 장면에 시간이 흐르는 표현
 WEAR_WORDS = re.compile(r"목걸이|목에 (건|걸)|사원증을 (목|걸)|명찰|귀걸이|팔찌|손목시계|이어폰")
 
 SHOT_KO = {"ECU": "익스트림 클로즈업. 피사체의 한 부분이 화면을 꽉 채운다.", "CU": "클로즈업. 얼굴과 어깨 위가 화면을 꽉 채운다.",
@@ -79,8 +80,15 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 - size: ECU, CU, MCU, MS, MLS, WS, INSERT, 2-SHOT, OTS 중 하나.
 - angle: 정면, 3/4 측면, 측면, 뒤에서, 어깨 너머, 하이앵글, 로우앵글, 부감, POV 중 하나.
 - camera: 고정, 천천히 다가감, 천천히 물러남, 핸드헬드, 팬, 줌인 중 하나.
-- action: 한 컷에 한 가지 상태·한 가지 행동. 확정형 한국어 문장. 화면에 보이는 대상(사물·화면)을 빠짐없이 씀. '살짝·약간·정도·또는·처럼 보·수 있' 금지.
-- action_en: action 과 같은 내용의 영어 한 문장 (이미지·영상 생성용). 보이는 대상을 빠짐없이. 'slightly·maybe·or' 금지.
+- action: 이 컷에서 일어나는 일 요약 (한국어 한 문장, 콘티표 표시용).
+- frame_ko / frame_en: 첫 장면. 스틸(영상의 첫 프레임)로 찍을 사진 한 장. 정지된 한 순간, 동사 하나.
+  누가 어디에 어떤 자세로 있고 무엇을 손에 들고 어디를 보는지, 화면에 보이는 사물을 빠짐없이 씀.
+  '~하고 ~한다', '~하자', '~하면서', '~다가' 처럼 시간이 흐르는 문장 금지. 예: "세영이 열린 게이트 앞에 서서 방문증을 오른손에 쥐고 로비 안쪽을 본다."
+- motion_ko / motion_en: 움직임. 첫 장면에서 시작해 영상에서 일어나는 움직임 하나 (3초 안에 끝나는 동작).
+  예: "세영이 게이트 사이로 한 걸음 걸어 들어간다." motion 이 "still" 인 컷은 "카메라만 움직인다".
+- 기계를 다루는 동작(카드 찍기, 게이트 열림, 키보드 입력, 버튼 누르기, 화면 터치)은 INSERT 컷으로 따로 뺌.
+  그 INSERT 컷의 frame 은 "방문증을 쥔 손이 게이트 리더기 바로 앞에 있다" 같은 정지 상태.
+- 확정형. '살짝·약간·정도·또는·처럼 보·수 있' 금지. 영어는 'slightly·maybe·or' 금지.
 - dialogue: 이 컷에서 들리는 대사 {"who":통일 이름,"text":대사,"on_screen":입이 보이면 true}. 없으면 null.
 - screen_text: 휴대폰·모니터·문서에 보이는 글자. 그림에는 글자를 넣지 않고 편집에서 얹으므로 글자만 적음. 없으면 "".
 - chars: 화면에 보이는 인물(통일 이름). 손·뒷모습만 보이면 이름 뒤에 ':손' 또는 ':뒷모습'.
@@ -89,7 +97,23 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 
 JSON 만 출력:
 {"cuts":[{"no":1,"scene":1,"size":"","angle":"","camera":"","dur":1.5,"motion":"","climax":false,
-"chars":[],"loc":"L01","action":"","action_en":"","dialogue":null,"screen_text":"","sfx":""}]}"""
+"chars":[],"loc":"L01","action":"","frame_ko":"","frame_en":"","motion_ko":"","motion_en":"","dialogue":null,"screen_text":"","sfx":""}]}"""
+
+REVIEW = """당신은 한국 실사 숏폼 드라마의 콘티 감수자입니다. 감독이 짠 콘티(JSON)를 받아, 그림 생성 AI가 실패하지 않도록 고칩니다.
+
+컷마다 점검:
+1. frame(첫 장면)이 사진 한 장으로 찍을 수 있는 정지된 한 순간인가. 동사가 둘 이상이거나 시간이 흐르면(~하고, ~하자, ~하면서, ~다가) 실패.
+   → 앞 동작을 frame 으로, 뒤 동작을 motion 으로 옮기거나, 컷을 둘로 나눔.
+2. 기계를 다루는 동작(카드 찍기, 게이트 열림, 키보드 입력, 버튼·화면 터치)이 사람 컷의 frame 에 섞여 있으면 실패. → INSERT 컷을 따로 만듦.
+3. frame 에 적힌 사물·화면이 action 에 나온 것과 같은가 (예: action 에 노트북이 있으면 frame 에도 노트북). 빠졌으면 채움.
+4. 몸에 거는 소품(목걸이·사원증·명찰·장신구·시계·이어폰)이 있으면 손에 든 상태로 바꿈.
+5. 얼굴이 보이는 인물이 3명 이상이면 2명 이하로 (나머지는 뒷모습·흐린 배경).
+6. motion 이 3초 안에 끝나는 움직임 하나인가. 둘 이상이면 하나로 줄임.
+
+컷을 나누면 길이(dur)를 나눠 담고, 대사는 원문을 그대로 나눠 담음. 고칠 것이 없는 컷은 그대로 둠.
+컷 번호(no)는 처음부터 다시 매김. 다른 필드 형식과 규칙(컷 수 14~16, 합계 50~70초)은 감독 콘티와 같음.
+
+JSON 만 출력: {"cuts":[…고친 전체 콘티…], "changes":["무엇을 왜 고쳤는지 한 줄씩"]}"""
 
 
 def syl(t: str) -> int:
@@ -112,16 +136,31 @@ def episode_text(ep: dict, bible: dict | None) -> str:
     return "\n".join(out)
 
 
-def split(api_key: str, ep: dict, bible: dict | None, model: str = "") -> dict:
+def _ask(api_key: str, system: str, text: str, model: str = "") -> dict:
     import anthropic
     from json_repair import repair_json
     c = anthropic.Anthropic(api_key=api_key)
-    r = c.messages.create(model=model or DEFAULT_MODEL, max_tokens=12000, system=SYSTEM,
-                          messages=[{"role": "user", "content": episode_text(ep, bible)}])
+    r = c.messages.create(model=model or DEFAULT_MODEL, max_tokens=16000, system=system,
+                          messages=[{"role": "user", "content": text}])
     txt = "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
     data = json.loads(repair_json(txt))
-    cuts = data.get("cuts", []) if isinstance(data, dict) else []
-    return {"cuts": normalize(cuts, ep, bible), "model": model or DEFAULT_MODEL}
+    return data if isinstance(data, dict) else {}
+
+
+def split(api_key: str, ep: dict, bible: dict | None, model: str = "", review: bool = True) -> dict:
+    """콘티 만들기: ① 감독(컷 나누기) → ② 감수(첫 장면이 사진 한 장으로 찍히는지 점검·수정) → ③ 코드 규칙 정리."""
+    src = episode_text(ep, bible)
+    cuts = _ask(api_key, SYSTEM, src, model).get("cuts", [])
+    changes = []
+    if review and cuts:
+        try:
+            r = _ask(api_key, REVIEW, f"[대본]\n{src}\n\n[감독 콘티]\n{json.dumps({'cuts': cuts}, ensure_ascii=False)}", model)
+            if isinstance(r.get("cuts"), list) and len(r["cuts"]) >= max(1, len(cuts) // 2):
+                cuts = r["cuts"]
+                changes = [str(x) for x in (r.get("changes") or [])][:30]
+        except Exception as ex:                       # 감수가 실패해도 감독 콘티는 살림
+            changes = [f"감수 단계 오류로 감독 콘티를 그대로 씀: {str(ex)[:100]}"]
+    return {"cuts": normalize(cuts, ep, bible), "model": model or DEFAULT_MODEL, "changes": changes}
 
 
 def name_map(bible: dict | None) -> dict:
@@ -192,7 +231,11 @@ def normalize(cuts: list, ep: dict, bible: dict | None = None) -> list:
             "motion": c.get("motion") if c.get("motion") in MOTIONS else "move",
             "climax": bool(c.get("climax", False)), "chars": [canon(str(x), nm) for x in (c.get("chars") or [])],
             "loc": str(c.get("loc", "")), "action": str(c.get("action", "")).strip(),
-            "action_en": str(c.get("action_en", "")).strip(), "dialogue": d,
+            "action_en": str(c.get("action_en", "")).strip(),
+            "frame_ko": str(c.get("frame_ko") or c.get("action") or "").strip(),
+            "frame_en": str(c.get("frame_en") or c.get("action_en") or "").strip(),
+            "motion_ko": str(c.get("motion_ko") or "").strip(),
+            "motion_en": str(c.get("motion_en") or c.get("action_en") or "").strip(), "dialogue": d,
             "screen_text": str(c.get("screen_text") or ""), "sfx": str(c.get("sfx") or ""),
         })
     return fit_durations(cap_video(out))
@@ -283,9 +326,11 @@ def check(cuts: list, known_chars: set, known_locs: set, scenes: list | None = N
                 issues.append({"id": c["id"], "level": "fix", "msg": "말하는 얼굴이 영상 컷 (립싱크 없음 → 정지 컷으로)"})
             if d.get("on_screen") and c["dur"] > TALK_MAX + 0.05:
                 issues.append({"id": c["id"], "level": "todo", "msg": f"말하는 얼굴 {c['dur']}초 (2.5초 넘는 부분은 듣는 사람 컷으로 넘기기)"})
-        if WEAR_WORDS.search(c["action"]):
+        if FLOW_WORDS.search(c.get("frame_ko", "")):
+            issues.append({"id": c["id"], "level": "todo", "msg": "첫 장면에 동작이 둘 이상 (사진 한 장으로 찍히는 한 순간으로)"})
+        if WEAR_WORDS.search(c["action"] + " " + c.get("frame_ko", "")):
             issues.append({"id": c["id"], "level": "fix", "msg": "몸에 거는 소품 표현 (손에 들거나 인서트로)"})
-        for b in banned_in(c["action"] + " " + c.get("action_en", "")):
+        for b in banned_in(" ".join([c["action"], c.get("frame_ko", ""), c.get("frame_en", ""), c.get("motion_en", "")])):
             issues.append({"id": c["id"], "level": "fix", "msg": f"행동 문장 금지어 {b}"})
     return issues
 
@@ -300,12 +345,14 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None)
         base, _, part = ch.partition(":")
         desc = cast.get(base, base)
         tag = f"the person in reference image {pos[base]}, same face, hair and outfit" if base in pos else desc
+        if f"{base}@정면" in pos:
+            tag += f" (reference image {pos[base + '@정면']} shows the same person from the front)"
         who.append(f"{tag}, only the hands visible" if part == "손" else f"{tag}, seen from behind" if part == "뒷모습" else tag)
     loc = locs.get(c["loc"], ("", ""))
     tight = c["size"] in ("ECU", "CU", "INSERT")
     place = (f"the same room as reference image {pos[c['loc']]}, " if c["loc"] in pos else "") + (loc[1] or loc[0])
     lines = [f"Vertical 9:16 still frame from a Korean drama. {SHOT_EN.get(c['size'], 'medium shot').capitalize()}, {ANG_EN.get(c['angle'], 'eye level')}.",
-             f"Scene: {c.get('action_en') or c['action']}",
+             f"Scene, one frozen moment: {c.get('frame_en') or c.get('action_en') or c['action']}",
              ("Characters: " + "; ".join(who) + ".") if who else "No people in frame.",
              f"Location: {place}" + (", background softly blurred." if tight else "."),
              ("Reference images are identity and set references only: keep faces, hair, clothing and the room exactly, "
@@ -324,12 +371,13 @@ def video_prompt(c: dict, cast: dict) -> str:
     who = [cast.get(ch.split(":")[0], ch) for ch in c["chars"]]
     dl = "Any voice is added in editing: nobody in frame moves their lips, mouths stay closed." if c["dialogue"] else ""
     mv = {"still": "Almost no motion: only a slow camera move on the still image.",
-          "move": "Small natural motion only: blinking, breathing, a small turn of the head or hand. Mouth closed.",
+          "move": "One small, simple movement only, as described; everything else stays still. Mouth closed.",
           "video": "Full natural acting motion as described."}[c["motion"]]
     parts = [f"Shot: {SHOT_EN.get(c['size'], 'medium shot')}, {ANG_EN.get(c['angle'], 'eye level')}, vertical 9:16.",
              f"Camera: {CAM_EN.get(c['camera'], CAM_EN['고정'])}",
              ("Characters: " + "; ".join(who) + ".") if who else "",
-             f"Action: {c.get('action_en') or c['action']}", mv, dl,
+             f"First frame: {c.get('frame_en') or c.get('action_en') or c['action']}",
+             f"Motion from the first frame: {c.get('motion_en') or c.get('action_en') or c['action']}", mv, dl,
              "Keep the face, hair and clothing of the first frame unchanged for the whole clip; no new people enter the frame.",
              f"Duration: {clip_seconds(c['dur'])} seconds. Photoreal, natural light, no text on screen."]
     return " ".join(x for x in parts if x)

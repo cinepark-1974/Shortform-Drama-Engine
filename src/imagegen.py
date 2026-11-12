@@ -57,6 +57,22 @@ STYLES = {
             "Shallow depth of field with a soft out-of-focus foreground object at the frame edge. "
             "Medium-format film look with Kodak Portra 160 color, visible organic film grain, soft highlight roll-off "
             "and a faint vignette. Imperfect natural framing with the subject off center." + NO_WEAR + NEG),
+    # 02 캐스팅 시트: 확정 정면 그림을 기준 그림으로 넣어 3/4·전신·뒷모습을 만든다 (자세는 VIEWS 문장이 정함).
+    "sheet": ("A Korean actor casting reference sheet photo, ultra-photorealistic studio photography. " + SKIN,
+              " Real knit and fabric texture with soft folds, individual hair strands visible. "
+              "Neutral bright grey seamless studio background, soft diffused studio light with gentle shadows, "
+              "85mm lens, natural optical rendering, fine photographic grain, natural color grading." + NO_WEAR + NEG),
+}
+# 캐스팅 시트 (「3 Minutes」 4장 세트 방식): 정면 = 확정 그림, 나머지 3장은 정면을 기준 그림으로 생성.
+SAME = ("The same person as the reference image: identical face, hairstyle, bangs, hair color and clothing. "
+        "Neutral relaxed expression. ")
+VIEWS = {
+    "side": ("3/4", "3:4", SAME + "Three-quarter view: body and face turned 45 degrees to the camera's left, eyes looking past "
+             "the camera. Vertical framing from the top of the head to the upper hips."),
+    "full": ("전신", "9:16", SAME + "Full-body front view from the top of the head to the shoes, standing straight, arms relaxed "
+             "at the sides, the whole outfit and plain shoes visible, space above the head and below the feet."),
+    "back": ("뒷모습", "9:16", SAME + "Back view from directly behind, full body from the head to the shoes, standing straight, "
+             "the back of the hairstyle and the back of the outfit clearly visible, the face not visible."),
 }
 PHOTO_HEAD, PHOTO_TAIL = STYLES["cut"]   # 예전 이름 호환
 

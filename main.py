@@ -1,4 +1,4 @@
-"""BLUE JEANS · SHORTFORM DRAMA ENGINE  (숏폼드라마 엔진) v0.5
+"""BLUE JEANS · SHORTFORM DRAMA ENGINE  (숏폼드라마 엔진) v0.6
 
 1인 운영 자동화 엔진. Shortform-Engine 대본 → 작품 정리 → 캐스팅 → 회당 컷 분할 → 스틸 → 영상 → 더빙 → 자막 → 편집 → 마스터.
 v0.2 범위: 01 대본(작품 정리·정리본 내보내기) · 02 캐스팅 · 03 회당 컷 분할. 04 이후는 자리만.
@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v0.5"
+VERSION = "v0.6"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -98,8 +98,8 @@ SAMPLES = Path(__file__).parent / "samples"
 STAGES = [
     ("script", "01", "대본", "원고 읽기 · 작품 정리"),
     ("cast", "02", "캐스팅", "인물 · 장소 기준 이미지"),
-    ("cut", "03", "컷", "회당 컷 분할 · 지시문"),
-    ("still", "04", "스틸", "컷별 장면 이미지"),
+    ("cut", "03", "콘티", "컷 나누기 · 첫 장면 · 움직임"),
+    ("still", "04", "콘티 그림", "컷별 첫 장면 스틸 · 자동 검수"),
     ("clip", "05", "영상", "움직임 · 완전 영상"),
     ("dub", "06", "더빙", "인물별 고정 목소리"),
     ("sub", "07", "자막·사운드", "한/영 자막 · 효과음"),
@@ -111,7 +111,7 @@ HOW = {
     "still": "컷마다 장면 그림을 만듭니다. 인물 확정 그림과 장소 마스터를 기준 그림으로 넣고, 만든 직후 Claude 가 자동 검수합니다(지시문 대상·동작·몸에 거는 소품·같은 얼굴·글자·손). 불합격이면 이유를 지시문에 붙여 2회까지 다시 만들고, 그래도 불합격인 컷만 빨간 표시가 남습니다.",
     "script": "대본을 읽고 작품 정리를 합니다. 엔진은 인물 표기와 장소 세트만 통일하고, 설정 충돌은 '수정 제안'으로 남깁니다. 원고 수정은 감독님이 직접 하고, 고친 원고를 다시 올리면 됩니다.",
     "cast": "인물마다 프로필을 확정하고 얼굴 후보 중 1장을 고릅니다. 장소는 넓은 마스터 1장을 고릅니다. 직접 만든 이미지는 올리기로 넣습니다.",
-    "cut": "한 화를 14~16컷, 50~70초로 잘게 나눕니다 (보통 컷 1.5~3초, 클라이맥스 한 컷만 4~6초 버티기). 말하는 얼굴은 정지 컷 2.5초 이하, 긴 대사는 듣는 사람 컷으로 이어 갑니다. 컷마다 크기·각도·움직임 종류·대사·화면 글자를 정하고 스틸·영상 지시문을 만듭니다. 빨간 표시는 고쳐야 할 컷입니다.",
+    "cut": "대본을 콘티로 바꿉니다. 컷마다 '첫 장면'(스틸로 찍을 사진 한 장, 정지된 한 순간)과 '움직임'(영상에서 일어날 동작 하나)을 따로 쓰고, 감수 AI가 사진 한 장으로 찍히지 않는 컷을 고치거나 나눕니다. 한 화를 14~16컷, 50~70초로 잘게 나눕니다 (보통 컷 1.5~3초, 클라이맥스 한 컷만 4~6초 버티기). 말하는 얼굴은 정지 컷 2.5초 이하, 긴 대사는 듣는 사람 컷으로 이어 갑니다. 컷마다 크기·각도·움직임 종류·대사·화면 글자를 정하고 스틸·영상 지시문을 만듭니다. 빨간 표시는 고쳐야 할 컷입니다.",
 }
 
 
@@ -162,6 +162,30 @@ def cast_locs(work: dict) -> list[dict]:
     top = allr[: work.get("loc_n", 8)]
     ids = {l["id"] for l in top}
     return top + [l for l in allr if l["id"] in work.get("loc_extra", []) and l["id"] not in ids]
+
+
+def sheet_of(info: dict) -> dict:
+    """캐스팅 시트 {front, side, full, back} → 저장 키. 정면이 바뀌어 예전 정면으로 만든 시트는 쓰지 않는다."""
+    if not info.get("pick"):
+        return {}
+    out = {"front": info["pick"]}
+    if info.get("views_of") == info["pick"]:
+        out.update({k: v for k, v in (info.get("views") or {}).items() if v})
+    return out
+
+
+def view_for(ch: str, c: dict) -> str:
+    """컷의 인물 표기·각도·크기 → 어떤 시트를 기준 그림으로 쓸지."""
+    part = ch.partition(":")[2]
+    if part == "뒷모습" or c.get("angle") == "뒤에서":
+        return "back"
+    if part == "손":
+        return "front"
+    if c.get("angle") in ("3/4 측면", "측면"):
+        return "side"
+    if c.get("size") in ("WS", "MLS"):
+        return "full"
+    return "front"
 
 
 def stage_counts(work: dict | None) -> dict:
@@ -532,7 +556,7 @@ elif cur == "cast":
     chars_all, locs_all = chars_ranked(work), locs_ranked(work)
     a, b = stage_counts(work)["cast"]
     brief("cast", f"확정 {cast_split(work)}" + (" · 캐스팅 완료" if b and a >= b else ""))
-    picks = [(f"CAST_FINAL/{c}_ref_front.jpg", v["pick"]) for c, v in work.get("cast", {}).items() if v.get("pick")] + \
+    picks = [(f"CAST_FINAL/{c}_ref_{vw}.jpg", k) for c, v in work.get("cast", {}).items() for vw, k in sheet_of(v).items()] + \
             [(f"LOCATION_MASTER/{lid}_{next((l['name'] for l in B['locations'] if l['id'] == lid), '')}_master.jpg", v["pick"])
              for lid, v in work.get("loc", {}).items() if v.get("pick")]
     if picks:
@@ -623,6 +647,75 @@ elif cur == "cast":
                         save(work)
                         st.rerun()
 
+    def sheet_board(c, info):
+        """캐스팅 시트: 정면(확정) + 3/4 · 전신 · 뒷모습. 컷의 각도에 맞는 시트가 스틸의 기준 그림이 된다."""
+        sh = sheet_of(info)
+        stale = bool(info.get("views")) and info.get("views_of") != info["pick"]
+        st.markdown(f"**캐스팅 시트** <span class='small'>정면을 바꾸면 시트를 다시 만들어야 합니다. 뒷모습 컷·측면 컷·전신 컷의 기준 그림으로 씁니다.</span>"
+                    + (" <span class='tag fix'>정면이 바뀜 · 다시 만들기 필요</span>" if stale else ""), unsafe_allow_html=True)
+        need = [v for v in imagegen.VIEWS if v not in sh]
+        base = f"works/{work['id']}/cast/{slug(c)}"
+
+        def make_views(views):
+            front = img_bytes(info["pick"])
+            desc = info.get("prompt_en", "")
+
+            def one(v):
+                try:
+                    return imagegen.edit(KEYS["OPENAI_API_KEY"], imagegen.VIEWS[v][2] + " " + desc, [("front.jpg", front)],
+                                         imagegen.VIEWS[v][1], quality, style="sheet", model=KEYS.get("IMAGE_MODEL", ""))
+                except Exception as ex:
+                    return ex
+            with ThreadPoolExecutor(3) as ex:
+                res = list(ex.map(one, views))
+            if info.get("views_of") != info["pick"]:
+                info["views"], info["views_of"] = {}, info["pick"]
+            for v, r in zip(views, res):
+                if isinstance(r, Exception):
+                    st.error(f"{c} {imagegen.VIEWS[v][0]}: {r}")
+                    continue
+                k = f"{base}/sheet_{v}_{uuid.uuid4().hex[:6]}.jpg"
+                store.put_bytes(k, r, "image/jpeg")
+                info["views"][v] = k
+            save(work)
+
+        if need and st.button(f"시트 {len(need)}장 만들기 ({', '.join(imagegen.VIEWS[v][0] for v in need)})", key=f"sh_{c}",
+                              type="primary", disabled=not KEYS.get("OPENAI_API_KEY")):
+            with st.status(f"{c} 캐스팅 시트 {len(need)}장 생성 중… (1~2분)") as s:
+                make_views(need)
+                s.update(label="시트 생성 완료", state="complete")
+            st.rerun()
+        cols = st.columns(4)
+        for i, (v, lab) in enumerate([("front", "정면 (확정)")] + [(k, imagegen.VIEWS[k][0]) for k in imagegen.VIEWS]):
+            with cols[i]:
+                st.caption(lab)
+                if sh.get(v):
+                    d = img_bytes(sh[v])
+                    if d:
+                        st.image(d, width="stretch")
+                if v == "front":
+                    continue
+                if sh.get(v) and st.button("다시", key=f"shr_{c}_{v}", disabled=not KEYS.get("OPENAI_API_KEY")):
+                    with st.spinner(f"{c} {lab} 다시 만드는 중…"):
+                        make_views([v])
+                    st.rerun()
+                up = st.file_uploader("올리기", type=["png", "jpg", "jpeg", "webp"], key=f"shu_{c}_{v}", label_visibility="collapsed")
+                if up is not None and not st.session_state.get(f"done_{up.file_id}"):
+                    from io import BytesIO
+                    from PIL import Image
+                    im = Image.open(BytesIO(up.getvalue())).convert("RGB")
+                    im.thumbnail((2048, 2048))
+                    buf = BytesIO()
+                    im.save(buf, "JPEG", quality=92)
+                    k = f"{base}/sheet_{v}_up_{uuid.uuid4().hex[:6]}.jpg"
+                    store.put_bytes(k, buf.getvalue(), "image/jpeg")
+                    if info.get("views_of") != info["pick"]:
+                        info["views"], info["views_of"] = {}, info["pick"]
+                    info["views"][v] = k
+                    st.session_state[f"done_{up.file_id}"] = True
+                    save(work)
+                    st.rerun()
+
     with t_char:
         main_n = st.slider("기준 이미지를 만들 인물 수 (대사 많은 순)", 1, max(1, len(chars_all)), min(work.get("main_n", 6), max(1, len(chars_all))))
         if main_n != work.get("main_n"):
@@ -660,6 +753,8 @@ elif cur == "cast":
                         st.rerun()
                     st.error("다시 잡기에 실패했습니다. 한 번 더 눌러 주세요.")
                 asset_board("cast", c, c, info, "3:4", 4)
+                if info.get("pick"):
+                    sheet_board(c, info)
 
     with t_loc:
         loc_n = st.slider("마스터를 만들 장소 수 (장면 많은 순)", 1, max(1, len(locs_all)), min(work.get("loc_n", 8), max(1, len(locs_all))))
@@ -723,8 +818,18 @@ elif cur == "cut":
     castdesc = {c: (work.get("cast", {}).get(c, {}).get("prompt_en", "") or c).split(".")[0] for c in known_c}
     locdesc = {l["id"]: (l["name"], work.get("loc", {}).get(l["id"], {}).get("prompt_en", "") or l.get("desc", "")) for l in B["locations"]}
 
-    def store_cuts(ep_no: int, cuts: list, src: str):
-        allcuts[str(ep_no)] = {"cuts": cuts, "src": src, "at": now()}
+    def store_cuts(ep_no: int, cuts: list, src: str, changes: list | None = None):
+        """콘티 저장. 콘티가 바뀌면 컷 번호의 내용이 달라지므로 그 화의 스틸·영상은 보관함(stills_old·clips_old)으로 옮기고 처음부터."""
+        k = str(ep_no)
+        old = allcuts.get(k)
+        if old and old.get("cuts") != cuts:
+            for box in ("stills", "clips"):
+                if work.get(box, {}).get(k):
+                    work.setdefault(box + "_old", {}).setdefault(k, []).append({"at": now(), "data": work[box].pop(k)})
+            e_s = work.setdefault("eps", {}).setdefault(k, {})
+            for st_k in ("still", "clip", "still_qc", "clip_qc"):
+                e_s.pop(st_k, None)
+        allcuts[k] = {"cuts": cuts, "src": src, "at": now(), "changes": changes or []}
         iss = cutter.check(cuts, known_c, known_l, [s["no"] for s in parsed["episodes"][ep_no - 1]["scenes"]])
         work.setdefault("eps", {}).setdefault(str(ep_no), {})["cut"] = "fix" if any(i["level"] == "fix" for i in iss) else "done"
 
@@ -736,21 +841,22 @@ elif cur == "cut":
     ep = parsed["episodes"][ep_no - 1]
     with c2:
         st.write("")
-        if st.button("이 화 컷 나누기" if str(ep_no) not in allcuts else "이 화 다시 나누기", type="primary", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
-            with st.spinner(f"EP {ep_no} 컷 나누는 중… (20~40초)"):
+        if st.button("이 화 콘티 만들기" if str(ep_no) not in allcuts else "이 화 콘티 다시 만들기", type="primary", disabled=not KEYS.get("ANTHROPIC_API_KEY"),
+                     help="다시 만들면 이 화의 기존 스틸·영상은 보관함으로 옮기고 새 콘티로 처음부터 만듭니다."):
+            with st.spinner(f"EP {ep_no} 콘티 만드는 중… 컷 나누기 → 감수 (1~2분)"):
                 r = cutter.split(KEYS["ANTHROPIC_API_KEY"], ep, B, MODEL)
-            store_cuts(ep_no, r["cuts"], r["model"])
+            store_cuts(ep_no, r["cuts"], r["model"], r.get("changes"))
             save(work)
             st.rerun()
     with c3:
         st.write("")
         todo = [e["ep"] for e in parsed["episodes"] if str(e["ep"]) not in allcuts]
         # 한꺼번에 돌리지 않는다: 버튼 한 번 = 한 화. 감독님이 결과를 보고 다음 화로 넘어간다.
-        if todo and st.button(f"다음 화 나누기 (EP {todo[0]})", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
+        if todo and st.button(f"다음 화 콘티 (EP {todo[0]})", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
             n = todo[0]
-            with st.spinner(f"EP {n} 컷 나누는 중… (20~40초)"):
+            with st.spinner(f"EP {n} 콘티 만드는 중… 컷 나누기 → 감수 (1~2분)"):
                 r = cutter.split(KEYS["ANTHROPIC_API_KEY"], parsed["episodes"][n - 1], B, MODEL)
-            store_cuts(n, r["cuts"], r["model"])
+            store_cuts(n, r["cuts"], r["model"], r.get("changes"))
             save(work)
             st.session_state["cut_ep_next"] = n      # 다음 실행에서 이 화를 화면에 띄움
             st.rerun()
@@ -779,7 +885,11 @@ elif cur == "cut":
         if extras:
             st.markdown(f"<span class='tag ok'>단역</span> {', '.join(extras)} <span class='small'>(바이블 밖 인물, 기준 이미지 없이 생성)</span>", unsafe_allow_html=True)
         if not main_iss:
-            st.markdown("<span class='tag ok'>점검 통과</span> 컷 수 · 길이 · 움직임 규칙 · 대사 길이 · 금지어 모두 통과", unsafe_allow_html=True)
+            st.markdown("<span class='tag ok'>점검 통과</span> 컷 수 · 길이 · 움직임 규칙 · 대사 길이 · 첫 장면 · 금지어 모두 통과", unsafe_allow_html=True)
+        if rec.get("changes"):
+            with st.expander(f"감수가 고친 곳 {len(rec['changes'])}건"):
+                for x in rec["changes"]:
+                    st.markdown(f"<div class='small'>· {x}</div>", unsafe_allow_html=True)
         for c in cuts:
             loc = locdesc.get(c["loc"], ("?", ""))[0]
             d = c["dialogue"]
@@ -789,7 +899,9 @@ elif cur == "cut":
             st.markdown(f"<div class='cut'><div class='h'>{c['id']} · {c['size']} · {c['angle']} · {c['camera']}<span class='d'>{c['dur']}s</span> "
                         f"<span class='tag {'mv' if c['motion'] == 'video' else 'ok'}'>{cutter.MOTIONS[c['motion']]}</span>"
                         f"{clx}</div>"
-                        f"<div class='a'>{c['action']}</div>{dl}{stx}<div class='s'>{c['loc']} {loc} · 인물 {', '.join(c['chars']) or '없음'}"
+                        f"<div class='a'>{c['action']}</div>"
+                        f"<div class='s'><b>첫 장면</b> {c.get('frame_ko') or c['action']}</div>"
+                        f"<div class='s'><b>움직임</b> {c.get('motion_ko') or ('카메라만 움직인다' if c['motion'] == 'still' else c.get('motion_en', ''))}</div>{dl}{stx}<div class='s'>{c['loc']} {loc} · 인물 {', '.join(c['chars']) or '없음'}"
                         f"{' · 효과음 ' + c['sfx'] if c['sfx'] else ''}</div></div>", unsafe_allow_html=True)
             with st.expander(f"{c['id']} 지시문 보기"):
                 st.markdown("**스틸 지시문** (gpt-image-2, 기준 그림 함께)")
@@ -815,7 +927,7 @@ elif cur == "still":
     done_n = sum(1 for v in eps_state.values() if v.get("still") == "done")
     brief("still", f"스틸 완료 {done_n} / {len(parsed['episodes'])}화")
     if not ready:
-        st.info("03 컷에서 먼저 컷을 나눈 화가 있어야 합니다.")
+        st.info("03 콘티에서 먼저 콘티를 만든 화가 있어야 합니다.")
         st.stop()
     known_c = {c["name"] for c in B["characters"]}
     castdesc = {c: (work.get("cast", {}).get(c, {}).get("prompt_en", "") or c).split(".")[0] for c in known_c}
@@ -826,9 +938,13 @@ elif cur == "still":
         out = []
         for ch in c["chars"]:
             base = ch.split(":")[0]
-            k = work.get("cast", {}).get(base, {}).get("pick")
-            if k and base not in [n for n, _ in out]:
-                out.append((base, k))
+            sh = sheet_of(work.get("cast", {}).get(base, {}))
+            if not sh or base in [n for n, _ in out]:
+                continue
+            v = view_for(ch, c)
+            out.append((base, sh.get(v) or sh["front"]))
+            if sh.get(v) and v != "front":            # 측면·뒷모습·전신 시트를 쓸 때는 얼굴 기준으로 정면도 함께
+                out.append((f"{base}@정면", sh["front"]))
         k = work.get("loc", {}).get(c["loc"], {}).get("pick")
         if k:
             out.append((c["loc"], k))
@@ -880,28 +996,37 @@ elif cur == "still":
         return tries
 
     def make(targets):
-        """targets = [(컷, 지시문, 기준그림)] → 동시에 4개씩 생성·검수, 저장은 이 함수 안(메인 흐름)에서.
+        """targets = [(컷, 지시문, 기준그림)] → 동시에 4개씩 생성·검수.
+        컷 하나가 끝날 때마다 바로 저장한다 (창이 닫혀도 이미 만든 그림은 남음).
         컷마다 이번에 만든 그림 중 합격한 첫 그림(없으면 불합격 항목이 가장 적은 그림)을 확정한다."""
+        from concurrent.futures import as_completed
         jobs = [t for t in targets for _ in range(n_c)]
-        with ThreadPoolExecutor(4) as ex:
-            results = list(ex.map(lambda t: gen_chain(*t), jobs))
         best = {}
-        for (c, prompt, refs), tries in zip(jobs, results):
-            cell = rec.setdefault(c["id"], {})
-            for t in tries:
-                if "err" in t:
-                    st.error(f"{c['id']}: {t['err']}")
+        with ThreadPoolExecutor(4) as ex:
+            futs = {ex.submit(gen_chain, *t): t for t in jobs}
+            for f in as_completed(futs):
+                c, prompt, refs = futs[f]
+                try:
+                    tries = f.result()
+                except Exception as e:
+                    st.error(f"{c['id']}: {e}")
                     continue
-                k = f"works/{work['id']}/still/ep{ep_no:03d}/{c['id']}_{uuid.uuid4().hex[:6]}.jpg"
-                store.put_bytes(k, t["img"], "image/jpeg")
-                cell.setdefault("cands", []).append(k)
-                cell.setdefault("qc_by", {})[k] = t["qc"]
-                cell.setdefault("prompt_by", {})[k] = t["prompt"]
-                sc = qc.score(t["qc"]) if t["qc"] else 0
-                if c["id"] not in best or sc < best[c["id"]][0]:
-                    best[c["id"]] = (sc, k)
-        for cid, (sc, k) in best.items():
-            set_pick(rec[cid], k)
+                cell = rec.setdefault(c["id"], {})
+                for t in tries:
+                    if "err" in t:
+                        st.error(f"{c['id']}: {t['err']}")
+                        continue
+                    k = f"works/{work['id']}/still/ep{ep_no:03d}/{c['id']}_{uuid.uuid4().hex[:6]}.jpg"
+                    store.put_bytes(k, t["img"], "image/jpeg")
+                    cell.setdefault("cands", []).append(k)
+                    cell.setdefault("qc_by", {})[k] = t["qc"]
+                    cell.setdefault("prompt_by", {})[k] = t["prompt"]
+                    sc = qc.score(t["qc"]) if t["qc"] else 0
+                    if c["id"] not in best or sc < best[c["id"]][0]:
+                        best[c["id"]] = (sc, k)
+                if c["id"] in best:
+                    set_pick(cell, best[c["id"]][1])
+                finish()                             # 컷마다 저장
 
     def set_pick(cell, k):
         cell["pick"] = k
@@ -989,7 +1114,7 @@ elif cur == "still":
                 qtag = f"<span class='tag fix'>불합격</span><div class='s' style='color:var(--fix)'>{qc.label(q)}</div>"
             st.markdown(f"<div class='cut'><div class='h'>{c['id']} · {c['size']}<span class='d'>{c['dur']}s</span> "
                         f"<span class='tag {'mv' if c['motion'] == 'video' else 'ok'}'>{cutter.MOTIONS[c['motion']]}</span></div>"
-                        f"<div class='s'>{c['action']}</div>"
+                        f"<div class='s'><b>첫 장면</b> {c.get('frame_ko') or c['action']}</div>"
                         f"<div class='s'>기준 그림: {', '.join(n for n, _ in refs) or '없음 (지시문만)'}</div>{qtag}</div>", unsafe_allow_html=True)
             if cell.get("pick"):
                 data = img_bytes(cell["pick"])
@@ -1042,7 +1167,7 @@ elif cur == "clip":
     done_n = sum(1 for v in eps_state.values() if v.get("clip") == "done")
     brief("clip", f"영상 완료 {done_n} / {len(parsed['episodes'])}화")
     if not ready:
-        st.info("04 스틸에서 모든 컷 그림이 확정된 화가 있어야 합니다.")
+        st.info("04 콘티 그림에서 모든 컷 그림이 확정된 화가 있어야 합니다.")
         st.stop()
     TOKEN = KEYS.get("REPLICATE_API_TOKEN", "")
     VMODEL = KEYS.get("REPLICATE_VIDEO_MODEL", "") or videogen.DEFAULT_MODEL
@@ -1186,7 +1311,7 @@ elif cur == "clip":
         with cols[i % 4]:
             st.markdown(f"<div class='cut'><div class='h'>{c['id']} · {c['size']}<span class='d'>{c['dur']}s</span> "
                         f"<span class='tag {'mv' if c['motion'] == 'video' else 'ok'}'>{cutter.MOTIONS[c['motion']]}</span></div>"
-                        f"<div class='s'>{c['action']}</div></div>", unsafe_allow_html=True)
+                        f"<div class='s'><b>움직임</b> {c.get('motion_ko') or c.get('motion_en') or c['action']}</div></div>", unsafe_allow_html=True)
             if c["motion"] == "still":
                 d = img_bytes(srec.get(c["id"], {}).get("pick", "")) if srec.get(c["id"], {}).get("pick") else None
                 if d:
