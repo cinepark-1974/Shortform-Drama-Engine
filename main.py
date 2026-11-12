@@ -1,4 +1,4 @@
-"""BLUE JEANS · SHORTFORM DRAMA ENGINE  (숏폼드라마 엔진) v0.2
+"""BLUE JEANS · SHORTFORM DRAMA ENGINE  (숏폼드라마 엔진) v0.5
 
 1인 운영 자동화 엔진. Shortform-Engine 대본 → 작품 정리 → 캐스팅 → 회당 컷 분할 → 스틸 → 영상 → 더빙 → 자막 → 편집 → 마스터.
 v0.2 범위: 01 대본(작품 정리·정리본 내보내기) · 02 캐스팅 · 03 회당 컷 분할. 04 이후는 자리만.
@@ -16,10 +16,10 @@ from pathlib import Path
 import streamlit as st
 
 from src import videogen, bible as bb
-from src import cutter, imagegen, profiles, script_parser
+from src import cutter, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v0.4"
+VERSION = "v0.5"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -107,11 +107,11 @@ STAGES = [
     ("master", "09", "마스터", "확인 · 업로드"),
 ]
 HOW = {
-    "clip": "확정한 스틸을 첫 프레임으로 넣어 짧은 영상을 만듭니다 (Replicate · Kling). 소리는 만들지 않고 06·07 단계에서 대사와 효과음을 얹습니다.",
-    "still": "컷마다 장면 그림을 만듭니다. 화면에 나오는 인물의 확정 그림과 장소 마스터를 기준 그림으로 함께 넣어 얼굴·의상·공간을 이어 갑니다. 글자는 그림에 넣지 않고 편집에서 얹습니다.",
+    "clip": "확정한 스틸을 첫 프레임으로 넣어 짧은 영상을 만듭니다 (Replicate · Kling). 테이크마다 첫·중간·마지막 장면을 Claude 가 검수하고, 불합격이면 고쳐서 2회까지 다시 만듭니다. 그래도 불합격이면 그 컷은 정지+카메라로 바꿉니다. 소리는 06·07 단계에서 얹습니다.",
+    "still": "컷마다 장면 그림을 만듭니다. 인물 확정 그림과 장소 마스터를 기준 그림으로 넣고, 만든 직후 Claude 가 자동 검수합니다(지시문 대상·동작·몸에 거는 소품·같은 얼굴·글자·손). 불합격이면 이유를 지시문에 붙여 2회까지 다시 만들고, 그래도 불합격인 컷만 빨간 표시가 남습니다.",
     "script": "대본을 읽고 작품 정리를 합니다. 엔진은 인물 표기와 장소 세트만 통일하고, 설정 충돌은 '수정 제안'으로 남깁니다. 원고 수정은 감독님이 직접 하고, 고친 원고를 다시 올리면 됩니다.",
     "cast": "인물마다 프로필을 확정하고 얼굴 후보 중 1장을 고릅니다. 장소는 넓은 마스터 1장을 고릅니다. 직접 만든 이미지는 올리기로 넣습니다.",
-    "cut": "한 화를 6~8컷, 50~70초로 나눕니다. 컷마다 크기·각도·움직임 종류·대사·화면 글자를 정하고 스틸·영상 지시문을 만듭니다. 빨간 표시는 고쳐야 할 컷입니다.",
+    "cut": "한 화를 14~16컷, 50~70초로 잘게 나눕니다 (보통 컷 1.5~3초, 클라이맥스 한 컷만 4~6초 버티기). 말하는 얼굴은 정지 컷 2.5초 이하, 긴 대사는 듣는 사람 컷으로 이어 갑니다. 컷마다 크기·각도·움직임 종류·대사·화면 글자를 정하고 스틸·영상 지시문을 만듭니다. 빨간 표시는 고쳐야 할 컷입니다.",
 }
 
 
@@ -253,7 +253,9 @@ def heatmap(work: dict, levels: list[int], big: bool = False) -> str:
     cells = ""
     for i, lv in enumerate(levels, start=1):
         bg, fg = shade(lv)
-        cls = ("g " if (i - 1) % BINGE == 0 else "") + ("fx" if eps.get(str(i), {}).get("cut") == "fix" else "")
+        e_s = eps.get(str(i), {})
+        bad = e_s.get("cut") == "fix" or e_s.get("still_qc", 0) > 0 or e_s.get("clip_qc", 0) > 0
+        cls = ("g " if (i - 1) % BINGE == 0 else "") + ("fx" if bad else "")
         pad = "padding:7px 0;font-size:11px;" if big else ""
         cells += (f'<div class="{cls}" style="{pad}background:{bg};color:{fg}" '
                   f'title="EP {i} · {names[lv]} · {hooks.get(i, "")}">{i}</div>')
@@ -368,6 +370,9 @@ with st.sidebar:
     quality = st.selectbox("그림 품질", ["high", "medium", "low"],
                            index=0 if (KEYS.get("OPENAI_IMAGE_QUALITY") or "high") == "high" else 1,
                            help="캐스팅 후보는 얼굴이 기준이 되므로 high 권장 (세로 1장 약 $0.165, medium 약 $0.041).")
+    AUTO_QC = st.toggle("자동 검수 (Claude)", value=bool(KEYS.get("ANTHROPIC_API_KEY")), disabled=not KEYS.get("ANTHROPIC_API_KEY"),
+                        help="스틸·영상을 만든 직후 Claude 가 보고 판정합니다. 불합격이면 이유를 지시문에 붙여 2회까지 다시 만듭니다.")
+    QC_RETRY = 2
     MODEL = KEYS.get("CLAUDE_MODEL", "")
 
 work = store.load_work(st.session_state["wid"]) if st.session_state.get("wid") else None
@@ -848,44 +853,124 @@ elif cur == "still":
     cuts, rec, picked = still_state(ep_no)
     missing = [c for c in cuts if not rec.get(c["id"], {}).get("cands")]
 
-    def make(targets):
-        """targets = [(컷, 지시문, 기준그림)] → 동시에 4장씩 생성, 저장은 이 함수 안(메인 흐름)에서."""
-        def one(t):
-            c, prompt, refs = t
+    def gen_chain(c, prompt, refs):
+        """컷 하나: 만들기 → 자동 검수 → 불합격이면 이유를 지시문에 붙여 다시 (최대 QC_RETRY 회).
+        스레드 안에서 돌고, 저장은 하지 않는다. → [{'img','prompt','qc'} …] 시도 기록."""
+        ref_data = [(n, img_bytes(k)) for n, k in refs]
+        tries, p = [], prompt
+        for attempt in range(1 + (QC_RETRY if AUTO_QC else 0)):
             try:
-                return imagegen.edit(KEYS["OPENAI_API_KEY"], prompt, [(f"{n}.jpg", img_bytes(k)) for n, k in refs],
-                                     "9:16", quality, style="cut", model=KEYS.get("IMAGE_MODEL", ""))
+                img = imagegen.edit(KEYS["OPENAI_API_KEY"], p, [(f"{n}.jpg", d) for n, d in ref_data],
+                                    "9:16", quality, style="cut", model=KEYS.get("IMAGE_MODEL", ""))
             except Exception as ex:
-                return ex
+                tries.append({"err": str(ex), "prompt": p})
+                if attempt == 0 and any(x in str(ex) for x in ("429", "500", "502", "503", "imeout")):
+                    continue                          # 일시적인 오류는 한 번 더
+                break
+            res = None
+            if AUTO_QC:
+                try:
+                    res = qc.judge_still(KEYS["ANTHROPIC_API_KEY"], img, ref_data, c, p, MODEL)
+                except Exception as ex:              # 검수 자체가 실패하면 그림은 살리고 표시만 남김
+                    res = {"pass": True, "items": {}, "fails": [], "note": f"검수 오류: {str(ex)[:120]}"}
+            tries.append({"img": img, "prompt": p, "qc": res})
+            if res is None or res["pass"]:
+                break
+            p = qc.fix_prompt(p, res)
+        return tries
+
+    def make(targets):
+        """targets = [(컷, 지시문, 기준그림)] → 동시에 4개씩 생성·검수, 저장은 이 함수 안(메인 흐름)에서.
+        컷마다 이번에 만든 그림 중 합격한 첫 그림(없으면 불합격 항목이 가장 적은 그림)을 확정한다."""
         jobs = [t for t in targets for _ in range(n_c)]
         with ThreadPoolExecutor(4) as ex:
-            results = list(ex.map(one, jobs))
-        for (c, prompt, refs), r in zip(jobs, results):
-            if isinstance(r, Exception):
-                st.error(f"{c['id']}: {r}")
-                continue
-            k = f"works/{work['id']}/still/ep{ep_no:03d}/{c['id']}_{uuid.uuid4().hex[:6]}.jpg"
-            store.put_bytes(k, r, "image/jpeg")
+            results = list(ex.map(lambda t: gen_chain(*t), jobs))
+        best = {}
+        for (c, prompt, refs), tries in zip(jobs, results):
             cell = rec.setdefault(c["id"], {})
-            cell.setdefault("cands", []).append(k)
-            cell.setdefault("pick", k)                 # 첫 그림을 일단 확정 → 마음에 안 들면 다시 만들기
-            cell["prompt"] = prompt
+            for t in tries:
+                if "err" in t:
+                    st.error(f"{c['id']}: {t['err']}")
+                    continue
+                k = f"works/{work['id']}/still/ep{ep_no:03d}/{c['id']}_{uuid.uuid4().hex[:6]}.jpg"
+                store.put_bytes(k, t["img"], "image/jpeg")
+                cell.setdefault("cands", []).append(k)
+                cell.setdefault("qc_by", {})[k] = t["qc"]
+                cell.setdefault("prompt_by", {})[k] = t["prompt"]
+                sc = qc.score(t["qc"]) if t["qc"] else 0
+                if c["id"] not in best or sc < best[c["id"]][0]:
+                    best[c["id"]] = (sc, k)
+        for cid, (sc, k) in best.items():
+            set_pick(rec[cid], k)
+
+    def set_pick(cell, k):
+        cell["pick"] = k
+        cell["qc"] = cell.get("qc_by", {}).get(k)
+        cell["prompt"] = cell.get("prompt_by", {}).get(k) or cell.get("prompt")
+        cell.pop("qc_ok", None)
+
+    def qc_bad(cell) -> bool:
+        q = cell.get("qc")
+        return bool(q) and not q.get("pass") and not cell.get("qc_ok")
 
     def finish():
         cs, rc, pk = still_state(ep_no)
-        eps_state.setdefault(str(ep_no), {})["still"] = "done" if pk == len(cs) else "doing"
+        e_s = eps_state.setdefault(str(ep_no), {})
+        e_s["still"] = "done" if pk == len(cs) else "doing"
+        e_s["still_qc"] = sum(1 for c in cs if qc_bad(rc.get(c["id"], {})))
         save(work)
 
     with c3:
         st.write("")
         label = f"EP {ep_no} 스틸 만들기 ({len(missing)}컷)" if missing else f"EP {ep_no} 스틸 완료 · {picked}/{len(cuts)}컷 확정"
         if st.button(label, type="primary", disabled=not (KEYS.get("OPENAI_API_KEY") and missing)):
-            with st.status(f"EP {ep_no} 스틸 {len(missing) * n_c}장 생성 중… (4장씩 동시, 1~3분)") as s:
+            with st.status(f"EP {ep_no} 스틸 {len(missing) * n_c}장 생성{' · 자동 검수' if AUTO_QC else ''} 중… (4컷씩 동시, 2~6분)") as s:
                 make([(c, cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)]), refs_for(c)) for c in missing])
                 finish()
                 s.update(label="생성 완료", state="complete")
             st.rerun()
-    st.caption("버튼 한 번에 한 화만 만듭니다. 컷마다 첫 그림이 자동으로 확정되고, 마음에 안 드는 컷만 '이 컷 다시'로 바꾸면 됩니다.")
+    st.caption("버튼 한 번에 한 화만 만듭니다. 만든 직후 자동 검수를 거쳐 합격한 그림이 확정됩니다. 빨간 표시가 남은 컷만 보면 됩니다.")
+
+    have = [c for c in cuts if rec.get(c["id"], {}).get("pick")]
+    bad_cuts = [c for c in cuts if qc_bad(rec.get(c["id"], {}))]
+    unchecked = [c for c in have if not rec[c["id"]].get("qc")]
+    q1, q2, q3 = st.columns([1, 1, 2])
+    with q1:
+        if st.button(f"검수만 하기 ({len(have)}컷 · 그림 비용 없음)", disabled=not (KEYS.get("ANTHROPIC_API_KEY") and have),
+                     help="이미 확정된 그림을 다시 만들지 않고 검수만 합니다. 예전에 만든 화를 점검할 때 씁니다."):
+            with st.status(f"EP {ep_no} {len(have)}컷 검수 중… (4컷씩 동시)") as s:
+                def judge(c):
+                    cell = rec[c["id"]]
+                    try:
+                        return qc.judge_still(KEYS["ANTHROPIC_API_KEY"], img_bytes(cell["pick"]),
+                                              [(n, img_bytes(k)) for n, k in refs_for(c)], c,
+                                              cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)]), MODEL)
+                    except Exception as ex:
+                        return {"pass": True, "items": {}, "fails": [], "note": f"검수 오류: {str(ex)[:120]}"}
+                with ThreadPoolExecutor(4) as ex:
+                    res = list(ex.map(judge, have))
+                for c, r in zip(have, res):
+                    cell = rec[c["id"]]
+                    cell["qc"] = r
+                    cell.setdefault("qc_by", {})[cell["pick"]] = r
+                    cell.pop("qc_ok", None)
+                finish()
+                s.update(label=f"검수 완료 · 불합격 {sum(1 for r in res if not r['pass'])}컷", state="complete")
+            st.rerun()
+    with q2:
+        if st.button(f"불합격 컷 고치기 ({len(bad_cuts)}컷)", disabled=not (KEYS.get("OPENAI_API_KEY") and bad_cuts),
+                     type="primary" if bad_cuts else "secondary"):
+            with st.status(f"불합격 {len(bad_cuts)}컷을 고쳐 다시 만드는 중… (컷당 최대 {1 + QC_RETRY}회)") as s:
+                make([(c, qc.fix_prompt(rec[c["id"]].get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)]),
+                                        rec[c["id"]]["qc"]), refs_for(c)) for c in bad_cuts])
+                finish()
+                s.update(label="다시 만들기 완료", state="complete")
+            st.rerun()
+    with q3:
+        if have:
+            ok_n = sum(1 for c in have if (rec[c["id"]].get("qc") or {}).get("pass") or rec[c["id"]].get("qc_ok"))
+            st.markdown(f"<div class='small' style='margin-top:8px'>검수 합격 <b>{ok_n}</b> · 불합격 <b style='color:var(--fix)'>{len(bad_cuts)}</b>"
+                        f" · 검수 전 <b>{len(unchecked)}</b></div>", unsafe_allow_html=True)
 
     st.markdown(f"**EP {ep_no}** · {parsed['episodes'][ep_no - 1]['emotion']} · <span class='hook'>{parsed['episodes'][ep_no - 1]['hook']}</span>", unsafe_allow_html=True)
     cols = st.columns(4)
@@ -893,14 +978,27 @@ elif cur == "still":
         cell = rec.get(c["id"], {})
         refs = refs_for(c)
         with cols[i % 4]:
+            q = cell.get("qc")
+            if not q:
+                qtag = ""
+            elif cell.get("qc_ok"):
+                qtag = "<span class='tag ok'>통과 처리</span>"
+            elif q.get("pass"):
+                qtag = "<span class='tag ok'>검수 합격</span>" + (f"<div class='s'>{q['note']}</div>" if q.get("note") else "")
+            else:
+                qtag = f"<span class='tag fix'>불합격</span><div class='s' style='color:var(--fix)'>{qc.label(q)}</div>"
             st.markdown(f"<div class='cut'><div class='h'>{c['id']} · {c['size']}<span class='d'>{c['dur']}s</span> "
                         f"<span class='tag {'mv' if c['motion'] == 'video' else 'ok'}'>{cutter.MOTIONS[c['motion']]}</span></div>"
                         f"<div class='s'>{c['action']}</div>"
-                        f"<div class='s'>기준 그림: {', '.join(n for n, _ in refs) or '없음 (지시문만)'}</div></div>", unsafe_allow_html=True)
+                        f"<div class='s'>기준 그림: {', '.join(n for n, _ in refs) or '없음 (지시문만)'}</div>{qtag}</div>", unsafe_allow_html=True)
             if cell.get("pick"):
                 data = img_bytes(cell["pick"])
                 if data:
                     st.image(data, width="stretch")
+            if qc_bad(cell) and st.button("이대로 통과", key=f"sok_{c['id']}", help="검수 판정이 틀렸을 때 사람이 통과시킵니다."):
+                cell["qc_ok"] = True
+                finish()
+                st.rerun()
             others = [k for k in cell.get("cands", []) if k != cell.get("pick")]
             if others:
                 oc = st.columns(min(3, len(others)))
@@ -909,8 +1007,11 @@ elif cur == "still":
                         d = img_bytes(k)
                         if d:
                             st.image(d, width="stretch")
+                        qk = cell.get("qc_by", {}).get(k)
+                        if qk:
+                            st.caption("합격" if qk.get("pass") else "불합격")
                         if st.button("이걸로", key=f"spk_{k}"):
-                            cell["pick"] = k
+                            set_pick(cell, k)
                             finish()
                             st.rerun()
             with st.expander("지시문 · 다시 만들기"):
@@ -922,7 +1023,6 @@ elif cur == "still":
                 if st.button("이 컷 다시", key=f"sre_{c['id']}", disabled=not (KEYS.get("OPENAI_API_KEY") and not bad)):
                     with st.spinner(f"{c['id']} 다시 만드는 중…"):
                         make([(c, p2, refs)])
-                        rec[c["id"]]["pick"] = rec[c["id"]]["cands"][-1]
                         finish()
                     st.rerun()
     if picked == len(cuts) and todo and ep_no in todo:
@@ -960,44 +1060,86 @@ elif cur == "clip":
         ep_no = st.selectbox("화", ready, index=ready.index(dflt) if dflt in ready else 0, key="clip_ep",
                              format_func=lambda n: f"EP {n}" + (" ✓" if eps_state.get(str(n), {}).get("clip") == "done" else ""))
     with c2:
-        mode = st.selectbox("화질", ["standard", "pro"], format_func=lambda m: {"standard": "720p (기본)", "pro": "1080p (비용 높음)"}[m])
+        mode = st.selectbox("화질", ["pro", "standard"], format_func=lambda m: {"standard": "720p (시험용)", "pro": "1080p (기본 · 4K 업스케일 대비)"}[m],
+                            help="720p로 시험한 테이크를 1080p로 다시 만들면 다른 움직임이 나옵니다. 본편은 처음부터 1080p로 만듭니다.")
     cuts = allcuts[str(ep_no)]["cuts"]
     rec = clips.setdefault(str(ep_no), {})
     srec = stills.get(str(ep_no), {})
     moving = [c for c in cuts if c["motion"] in ("move", "video")]
     missing = [c for c in moving if not rec.get(c["id"], {}).get("key")]
-    running = {cid: r["get"] for cid, r in rec.items() if r.get("get") and not r.get("key") and r.get("status") not in videogen.DONE}
+    running = {cid: r["get"] for cid, r in rec.items() if r.get("get") and r.get("status") not in videogen.DONE}
+
+    cutmap = {c["id"]: c for c in cuts}
+
+    def clip_bad(cell) -> bool:
+        return bool(cell.get("fallback")) and not cell.get("qc_ok")
 
     def finish():
         ok = all(rec.get(c["id"], {}).get("key") for c in moving)
-        eps_state.setdefault(str(ep_no), {})["clip"] = "done" if ok else "doing"
+        e_s = eps_state.setdefault(str(ep_no), {})
+        e_s["clip"] = "done" if ok else "doing"
+        e_s["clip_qc"] = sum(1 for c in moving if clip_bad(rec.get(c["id"], {})))
         save(work)
 
-    def collect(jobs, box):
-        """진행 중인 예측을 끝까지 기다렸다가 영상을 저장소에 넣는다. 창을 닫아도 '결과 불러오기'로 이어 받을 수 있다."""
-        def tick(res):
-            n = sum(1 for r in res.values() if r.get("status") in videogen.DONE)
-            box.update(label=f"영상 {n}/{len(jobs)}개 완료 (컷마다 1~5분)")
-        res = videogen.wait_all(TOKEN, jobs, on_tick=tick)
-        for cid, r in res.items():
-            cell = rec.setdefault(cid, {})
-            cell["status"] = r.get("status")
-            if r.get("status") == "succeeded" and r.get("output"):
-                try:
-                    data = videogen.download(r["output"])
-                except Exception as ex:          # 받기 실패: 예측 번호는 남아 있으니 '결과 불러오기'로 다시
-                    cell["status"] = "processing"
-                    st.error(f"{cid}: 영상 받기 실패 ({ex}). 잠시 뒤 '결과 불러오기'를 누르세요.")
-                    continue
-                k = f"works/{work['id']}/clip/ep{ep_no:03d}/{cid}_{uuid.uuid4().hex[:6]}.mp4"
-                store.put_bytes(k, data, "video/mp4")
-                cell.setdefault("takes", []).append(k)
-                cell["key"] = k
-            elif r.get("status") in ("failed", "canceled"):
-                cell["error"] = str(r.get("error"))[:300]
-        finish()
+    def judge_take(cid, data):
+        c = cutmap[cid]
+        still = img_bytes(srec.get(cid, {}).get("pick", "")) if srec.get(cid, {}).get("pick") else None
+        if not (AUTO_QC and still):
+            return None
+        try:
+            return qc.judge_clip(KEYS["ANTHROPIC_API_KEY"], data, still, c, rec[cid].get("prompt", ""), MODEL)
+        except Exception as ex:
+            return {"pass": True, "items": {}, "fails": [], "note": f"검수 오류: {str(ex)[:120]}"}
 
-    def launch(targets):
+    def collect(jobs, box):
+        """진행 중인 예측을 끝까지 기다렸다가 영상을 저장소에 넣고 자동 검수한다.
+        불합격이면 이유를 지시문에 붙여 다시 만들고(컷당 QC_RETRY 회), 그래도 불합격이면 불합격 항목이 가장 적은 테이크를 남기고
+        그 컷을 '정지+카메라로 전환' 표시한다 (편집에서 스틸을 씀). 창을 닫아도 '결과 불러오기'로 이어 받을 수 있다."""
+        while jobs:
+            def tick(res):
+                n = sum(1 for r in res.values() if r.get("status") in videogen.DONE)
+                box.update(label=f"영상 {n}/{len(jobs)}개 완료 (컷마다 1~5분)")
+            res = videogen.wait_all(TOKEN, jobs, on_tick=tick)
+            retry = []
+            for cid, r in res.items():
+                cell = rec.setdefault(cid, {})
+                cell["status"] = r.get("status")
+                if r.get("status") == "succeeded" and r.get("output"):
+                    try:
+                        data = videogen.download(r["output"])
+                    except Exception as ex:          # 받기 실패: 예측 번호는 남아 있으니 '결과 불러오기'로 다시
+                        cell["status"] = "processing"
+                        st.error(f"{cid}: 영상 받기 실패 ({ex}). 잠시 뒤 '결과 불러오기'를 누르세요.")
+                        continue
+                    k = f"works/{work['id']}/clip/ep{ep_no:03d}/{cid}_{uuid.uuid4().hex[:6]}.mp4"
+                    store.put_bytes(k, data, "video/mp4")
+                    cell.setdefault("takes", []).append(k)
+                    cell["key"] = k
+                    box.update(label=f"{cid} 영상 검수 중…")
+                    q = judge_take(cid, data)
+                    cell["qc"] = q
+                    cell.setdefault("qc_by", {})[k] = q
+                    cell.pop("qc_ok", None)
+                    if not q or q["pass"]:
+                        cell.pop("fallback", None)
+                    elif cell.get("tries", 0) < QC_RETRY:
+                        retry.append((cutmap[cid], qc.fix_prompt(cell.get("prompt", ""), q)))
+                    else:                            # 다시 만들어도 불합격: 가장 나은 테이크 + 정지 컷 전환 표시
+                        bk = min(cell["takes"], key=lambda t: qc.score(cell.get("qc_by", {}).get(t)))
+                        cell["key"], cell["qc"] = bk, cell["qc_by"].get(bk)
+                        cell["fallback"] = not (cell["qc"] or {}).get("pass", True)
+                elif r.get("status") in ("failed", "canceled"):
+                    cell["error"] = str(r.get("error"))[:300]
+                    if r.get("status") == "failed" and cell.get("tries", 0) < 1:   # 서버 쪽 실패는 같은 지시문으로 한 번 더
+                        retry.append((cutmap[cid], cell.get("prompt", "")))
+            finish()
+            if not retry:
+                break
+            box.update(label=f"불합격 {len(retry)}컷 고쳐서 다시 만드는 중…")
+            jobs = launch(retry, again=True)
+
+    def launch(targets, again: bool = False):
+        """again=True 는 자동 검수 불합격으로 다시 만드는 경우 (시도 횟수를 이어서 셈)."""
         jobs = {}
         for c, prompt in targets:
             still = srec.get(c["id"], {}).get("pick")
@@ -1010,7 +1152,9 @@ elif cur == "clip":
             except Exception as ex:
                 st.error(f"{c['id']}: {ex}")
                 continue
-            rec[c["id"]] = {**{k: v for k, v in rec.get(c["id"], {}).items() if k == "takes"},
+            old = rec.get(c["id"], {})
+            rec[c["id"]] = {**{k: v for k, v in old.items() if k in ("takes", "qc_by", "key")},
+                            "tries": old.get("tries", 0) + 1 if again else 0,
                             "pred": p["id"], "get": p["get"], "status": p["status"], "prompt": prompt, "mode": mode, "model": VMODEL}
             jobs[c["id"]] = p["get"]
         save(work)                      # 예측 번호를 먼저 저장 (창을 닫아도 이어 받기)
@@ -1033,7 +1177,7 @@ elif cur == "clip":
                         collect(jobs, box)
                     box.update(label="생성 끝", state="complete")
                 st.rerun()
-    st.caption(f"모델 {VMODEL} · 확정 스틸을 첫 프레임으로 씁니다. '짧은 움직임'과 '완전 영상' 컷만 만들고, "
+    st.caption(f"모델 {VMODEL} · 확정 스틸을 첫 프레임으로 씁니다. '짧은 움직임'과 '완전 영상' 컷만 3초부터 만들고 편집에서 컷 길이만큼 자릅니다. "
                "'정지+카메라' 컷은 편집 단계에서 스틸에 카메라 움직임을 넣습니다. 버튼 한 번에 한 화만 진행합니다.")
 
     cols = st.columns(4)
@@ -1049,10 +1193,23 @@ elif cur == "clip":
                     st.image(d, width="stretch")
                 st.caption("편집에서 카메라 움직임만 넣습니다")
                 continue
+            q = cell.get("qc")
+            if cell.get("fallback") and not cell.get("qc_ok"):
+                st.markdown(f"<span class='tag fix'>정지+카메라로 전환</span><div class='small' style='color:var(--fix)'>{qc.label(q)}</div>",
+                            unsafe_allow_html=True)
+            elif cell.get("qc_ok"):
+                st.markdown("<span class='tag ok'>통과 처리</span>", unsafe_allow_html=True)
+            elif q:
+                st.markdown(f"<span class='tag {'ok' if q.get('pass') else 'fix'}'>{'검수 합격' if q.get('pass') else '불합격'}</span>"
+                            f"<span class='small'>{q.get('note', '') if q.get('pass') else qc.label(q)}</span>", unsafe_allow_html=True)
             if cell.get("key"):
                 v = img_bytes(cell["key"])
                 if v:
                     st.video(v)
+                if clip_bad(cell) and st.button("영상 그대로 쓰기", key=f"vok_{c['id']}", help="검수 판정이 틀렸을 때 사람이 통과시킵니다."):
+                    cell["qc_ok"] = True
+                    finish()
+                    st.rerun()
             elif cell.get("status") and cell["status"] not in videogen.DONE:
                 st.markdown('<span class="tag todo">생성 중</span>', unsafe_allow_html=True)
             elif cell.get("error"):
@@ -1061,6 +1218,8 @@ elif cur == "clip":
             for k in takes[-2:]:
                 if st.button("이전 테이크로", key=f"vtk_{k}"):
                     cell["key"] = k
+                    cell["qc"] = cell.get("qc_by", {}).get(k)
+                    cell["fallback"] = bool(cell["qc"]) and not cell["qc"].get("pass")
                     finish()
                     st.rerun()
             with st.expander("지시문 · 다시 만들기"):

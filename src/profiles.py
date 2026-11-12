@@ -15,12 +15,16 @@ SYSTEM = """당신은 한국 실사 드라마의 캐스팅 디렉터이자 미�
 - 주연·주요 조연은 TV 드라마 주연 배우급의 매력적인 외모로 정합니다. 가난·피로·처지는 얼굴이 아니라 의상·소품·머리 손질로 보여 줍니다.
   얼굴은 또렷한 이목구비, 맑고 큰 눈, 생기 있는 표정, 건강한 피부로. '가는 눈', '얇은 입술', '창백한' 같은 평범하거나 지친 인상의 특징은 주연에게 쓰지 않습니다.
 - 의상은 한 시즌 내내 입을 한 벌. 색은 베이지·아이보리·네이비·그레이·블랙 같은 차분한 색 위주.
+- 연속성 금지 소품: 사원증·출입증 목걸이, 명찰, 귀걸이·목걸이·반지·팔찌·시계, 머리핀·헤어밴드, 이어폰, 글자·로고·무늬가 있는 옷은 쓰지 않습니다.
+  옷은 무늬 없는 단색. 넥타이·스카프는 꼭 필요한 인물만 단색 하나로 고정. 안경은 인물마다 '항상 씀' 또는 '쓰지 않음' 하나로 정해 look_ko 에 적습니다.
+  묶은 머리는 머리끈이 보이지 않게 씁니다.
 - prompt_en 은 이미지 생성용 영어 한 문단. 인물만 씀(구도·배경·조명·필름 질감은 엔진이 붙임). 이 순서로:
   Face: 성별·나이대(예: a beautiful South Korean woman in her mid twenties), 얼굴형, 눈 색과 모양, 입술, 피부 톤.
   Hair: 색, 길이, 묶음, 앞머리·잔머리(예: medium-dark brown hair in a loose low ponytail with wispy bangs and face-framing strands).
   Clothing: 소재·색·핏까지(예: fitted light heather-grey wool-blend ribbed turtleneck, charcoal tailored trousers).
   Expression: 표정 하나(예: a gentle natural smile with lips closed).
   주연·주요 조연은 매력을 분명히 씀(beautiful / handsome, clear bright eyes 등). 'flawless', 'airbrushed', 'perfect skin', 'slightly', 'or' 금지.
+  prompt_en 에 장신구·사원증·명찰·로고를 넣지 않음.
 - 장소 prompt_en: 사람 없는 넓은 마스터 샷, 눈높이, 낮의 창 자연광(밤 장소면 실제 조명), 서울의 실제 같은 공간.
 
 JSON 만 출력:

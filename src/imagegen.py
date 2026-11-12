@@ -25,6 +25,13 @@ SKIN = ("Real skin texture with fine visible pores and a healthy natural glow, n
 NEG = (" No beauty filter, no airbrushing, no plastic skin, no waxy skin, no CGI look, no 3D render look, "
        "no HDR, no oversharpening, no exaggerated features. "
        "No text, no letters, no logo, no watermark anywhere in the image.")
+# 연속성 금지 소품 (2026-11-12 Mr. MOON 결정): 컷마다 나왔다 안 나왔다 하는 작은 소품은 처음부터 뺀다.
+# 이야기에 필요한 소품(방문증 등)은 그 컷에서 손에만 들고, 몸에 걸거나 착용하지 않는다.
+NO_WEAR = (" Nothing hangs around the neck: no lanyard, no ID badge, no name tag, no access card on the body. "
+           "No earrings, no necklace, no rings, no bracelet, no wristwatch, no hair clip, no headband, "
+           "no earphones, no headphones. Plain solid-color clothing with no print, no logo, no lettering.")
+NO_WEAR_KO = ["사원증·출입증·방문증 목걸이", "명찰", "귀걸이·목걸이·반지·팔찌·시계", "머리핀·헤어밴드",
+              "이어폰·헤드폰", "글자·로고·무늬가 있는 옷"]
 STYLES = {
     # 02 캐스팅 인물 기준 그림: 스튜디오 프로필 사진. 감정·장면은 넣지 않되, 화보처럼 매끈하지 않게
     # 작품 전체 톤(필름 색, 자연광)에 맞춘 자연스러운 사진으로.
@@ -37,7 +44,7 @@ STYLES = {
             "Neutral bright grey seamless studio background. "
             "LIGHTING & PHOTOGRAPHY: soft diffused studio light with gentle directional shadows, natural skin highlights and "
             "real dimensionality without heavy beauty retouching. 85mm portrait lens, realistic depth of field, natural "
-            "optical rendering, fine photographic grain, accurate skin and fabric texture, natural color grading." + NEG +
+            "optical rendering, fine photographic grain, accurate skin and fabric texture, natural color grading." + NO_WEAR + NEG +
             " No artificial hair clumps, no plastic hair shine, no exaggerated anatomy, no distorted facial features, "
             "no artificial facial symmetry, no oversized head, no exaggerated jawline, no unnatural fabric deformation."),
     # 02 캐스팅 장소 마스터: 사람 없는 넓은 공간.
@@ -49,7 +56,7 @@ STYLES = {
             " Real daylight mixing soft and hard light, true shadows under the chin and nose, uneven exposure. "
             "Shallow depth of field with a soft out-of-focus foreground object at the frame edge. "
             "Medium-format film look with Kodak Portra 160 color, visible organic film grain, soft highlight roll-off "
-            "and a faint vignette. Imperfect natural framing with the subject off center." + NEG),
+            "and a faint vignette. Imperfect natural framing with the subject off center." + NO_WEAR + NEG),
 }
 PHOTO_HEAD, PHOTO_TAIL = STYLES["cut"]   # 예전 이름 호환
 

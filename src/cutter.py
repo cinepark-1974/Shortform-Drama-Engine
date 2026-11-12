@@ -1,11 +1,20 @@
-"""회당 컷 분할: 한 화(60초 안팎)를 6~8컷으로 나누고, 컷마다 스틸·영상 지시문을 만든다.
+"""회당 컷 분할: 한 화(60초 안팎)를 14~16컷으로 잘게 나누고, 컷마다 스틸·영상 지시문을 만든다.
 
 AI(Claude)는 컷의 '내용'(크기·각도·행동·대사·움직임 종류)만 정하고,
 스틸·영상 지시문 문장은 코드가 규칙대로 조립한다 (3 MINUTES 콘솔의 stillPrompt / vpPrompt 방식).
+
+v0.5 (2026-11-12, Mr. MOON 결정)
+- 컷을 잘게: 한 화 14~16컷, 컷 하나 1.5~3초. 화당 한 컷만 4~6초 '버티기 컷'(클라이맥스).
+  빠른 컷 사이에 한 컷을 길게 버텨야 그 순간이 감정의 정점으로 읽힌다.
+- 영상은 3초부터 만들 수 있으므로(Kling 3~15초) 짧은 컷은 3초로 만들고 편집에서 잘라 쓴다.
+- 영상(짧은 움직임+완전 영상) 컷은 화당 7개까지. 나머지는 정지+카메라. 2초 안팎 정지 컷은 PPT처럼 보이지 않는다.
+- 립싱크 모델이 없으므로 말하는 얼굴은 정지 컷으로 2.5초 이하만 보여 주고, 긴 대사는 듣는 사람 컷으로 넘겨 이어 간다.
+- 몸에 거는 작은 소품(사원증 목걸이·장신구)은 쓰지 않는다. 이야기에 필요한 소품은 그 컷에서 손에만 든다.
 """
 from __future__ import annotations
 
 import json
+import math
 import re
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -13,7 +22,14 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 SIZES = ["ECU", "CU", "MCU", "MS", "MLS", "WS", "INSERT", "2-SHOT", "OTS"]
 ANGLES = ["정면", "3/4 측면", "측면", "뒤에서", "어깨 너머", "하이앵글", "로우앵글", "부감", "POV"]
 MOTIONS = {"still": "정지+카메라", "move": "짧은 움직임", "video": "완전 영상"}
+CUTS_LO, CUTS_HI = 12, 18      # 한 화 컷 수 허용 범위 (목표 14~16)
 MAX_VIDEO = 4          # 한 화 완전 영상 컷 상한 (마지막 컷·클라이맥스 포함)
+MAX_MOVING = 7         # 한 화 영상 생성 컷(짧은 움직임+완전 영상) 상한. 컷마다 최소 3초씩 과금되므로 비용 상한 역할
+DUR_MIN, DUR_MAX = 1.5, 4.0    # 보통 컷 길이
+STILL_MAX = 3.0                # 정지+카메라 컷 최대 길이 (3초를 넘으면 PPT처럼 보이기 시작)
+HOLD_MAX = 6.0                 # 버티기 컷(클라이맥스) 최대 길이
+TALK_MAX = 2.5                 # 말하는 얼굴이 보이는 컷 최대 길이 (립싱크 없음)
+WEAR_WORDS = re.compile(r"목걸이|목에 (건|걸)|사원증을 (목|걸)|명찰|귀걸이|팔찌|손목시계|이어폰")
 
 SHOT_KO = {"ECU": "익스트림 클로즈업. 피사체의 한 부분이 화면을 꽉 채운다.", "CU": "클로즈업. 얼굴과 어깨 위가 화면을 꽉 채운다.",
            "MCU": "미디엄 클로즈업. 가슴 위 상반신이 화면을 채운다.", "MS": "미디엄 샷. 허리 위 상반신과 주변 공간 일부가 보인다.",
@@ -28,34 +44,51 @@ CAM_EN = {"고정": "Static locked-off camera. No camera movement, no zoom.", "�
           "천천히 물러남": "Slow dolly out over the full clip.", "핸드헬드": "Subtle handheld camera, small natural sway.",
           "팬": "Slow pan following the subject.", "줌인": "Slow optical zoom in; the camera body stays in place."}
 
-SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 안팎)의 감독입니다.
-한 화의 대본을 컷으로 나눕니다. 시청자는 휴대폰 세로 화면으로 봅니다.
+SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 안팎)의 감독이자 편집자입니다.
+한 화의 대본을 컷으로 나눕니다. 시청자는 휴대폰 세로 화면으로 봅니다. 호흡은 빠른 쇼츠 편집입니다.
 
-규칙
-- 컷 6~8개. 컷 길이 합계 50~70초(목표 56초). 컷 하나 3~10초. 합계가 50초 미만이면 컷을 늘리지 말고 각 컷 dur 를 늘림.
-- 대사 컷의 dur 는 (대사 음절 수 ÷ 4) + 1초 이상.
-- 대본의 모든 S#(장면)은 최소 1컷씩 들어감. 장면을 건너뛰지 않음. scene 에는 그 컷이 속한 S# 번호를 정확히 씀.
-  장면이 많아 8컷을 넘길 것 같으면 짧은 장면을 컷 하나로 압축함.
-- 1번 컷은 첫 3초 안에 화의 훅을 보여 주는 컷. 마지막 컷은 대본의 '끊긴다' 순간이며 motion 은 반드시 "video".
-- 감정이 터지는 클라이맥스 컷은 climax true, motion "video".
-- motion: "still"(정지 그림+카메라 움직임), "move"(짧은 움직임: 눈 깜빡임·고개 돌림·손 움직임), "video"(완전 영상).
-  "video" 는 한 화에 최대 4개(마지막 컷·클라이맥스 포함). 완전 영상은 비용과 실패가 커서 꼭 필요한 컷에만 씀.
-  대사 컷은 대부분 "move" 로 충분함(입 움직임은 짧은 움직임으로 만듦).
-  "still" 은 한 화에 연속 2개를 넘지 않음. 대사하는 얼굴이 보이는 컷은 "move" 또는 "video".
-- size: ECU, CU, MCU, MS, MLS, WS, INSERT, 2-SHOT, OTS 중 하나. 세로 화면이라 WS 는 화당 1개 이하.
+컷 수·길이
+- 컷 14~16개. 컷 길이 합계 50~70초(목표 56초). 보통 컷은 1.5~3초.
+- 버티기 컷: 감정이 터지는 클라이맥스 한 컷만 4~6초로 길게 버팀(climax true). 화당 1개.
+  빠른 컷이 이어지다 이 컷에서 멈춰야 감정의 정점으로 읽힘. 나머지 컷은 4초를 넘기지 않음.
+- 1~3번 컷은 첫 3초 안에 훅을 보여 주는 1초 안팎의 빠른 컷 2~3개(얼굴 → 대상 → 반응).
+- 마지막 컷은 대본의 '끊긴다' 순간이며 motion 은 반드시 "video", 3~4초.
+- 대본의 모든 S#(장면)은 최소 1컷씩. scene 에는 그 컷이 속한 S# 번호를 정확히 씀.
+- 같은 장면 안에서 컷 크기를 섞음: 넓은 컷(MS·MLS·WS), 얼굴(MCU·CU), 인서트(손·휴대폰·모니터·소품)를 골고루. 세로 화면이라 WS 는 화당 1개 이하.
+
+대사 (립싱크 모델이 없음)
+- 말하는 얼굴이 보이는 컷(on_screen true)은 motion "still", dur 2.5초 이하.
+- 대사가 2.5초(10음절)를 넘으면 컷을 나눔: 앞 컷은 말하는 사람(on_screen true), 다음 컷은 듣는 사람의 반응·뒷모습·손(on_screen false)으로 대사를 이어 감.
+  나눈 대사는 대본 문장을 그대로 끊어서 앞 컷과 뒷 컷 text 에 나눠 담음 (합치면 원문 그대로).
+- 화면 밖 목소리·듣는 사람 컷은 on_screen false. 대사 컷 dur 는 (그 컷 대사 음절 수 ÷ 4) + 0.3초 이상.
+
+움직임
+- motion: "still"(정지 그림+카메라 움직임), "move"(짧은 움직임: 눈 깜빡임·고개 돌림·손 움직임, 입은 다묾), "video"(완전 영상).
+- 영상 생성 컷("move"+"video")은 한 화에 최대 7개. "video" 는 그중 최대 4개(마지막 컷·클라이맥스 포함).
+  나머지는 "still". 2초 안팎의 정지 컷은 빠른 편집 속에서 자연스러우므로 아끼지 말고 씀.
+- "still" 이 3초를 넘는 컷이 연속 2개를 넘지 않음.
+
+그림이 실패하지 않게
+- 한 컷에 인물은 2명까지. 단역 무리(사원들, 행인)는 뒷모습이나 흐린 배경으로만.
+- 손가락이 화면 가운데 크게 나오는 컷은 INSERT 로만, 행동 하나(쥔다·누른다)로.
+- 몸에 거는 작은 소품(사원증·출입증·방문증 목걸이, 명찰, 장신구, 시계, 이어폰)은 쓰지 않음.
+  대본에 소품이 필요하면 그 컷에서 손에 들고 있게 쓰거나 INSERT 컷으로 보여 줌. '목에 건' 같은 표현 금지.
+- 휴대폰·모니터 화면은 화면이 카메라를 향하게만 쓰고, 화면 글자는 screen_text 에만 적음.
+
+필드
+- size: ECU, CU, MCU, MS, MLS, WS, INSERT, 2-SHOT, OTS 중 하나.
 - angle: 정면, 3/4 측면, 측면, 뒤에서, 어깨 너머, 하이앵글, 로우앵글, 부감, POV 중 하나.
 - camera: 고정, 천천히 다가감, 천천히 물러남, 핸드헬드, 팬, 줌인 중 하나.
-- action: 한 컷에 한 가지 상태·한 가지 행동. 확정형 한국어 문장. '살짝·약간·정도·또는·처럼 보·수 있' 금지.
-- action_en: action 과 같은 내용의 영어 한 문장 (이미지·영상 생성용). 인물은 영어 이름 대신 역할로 써도 됨. 'slightly·maybe·or' 금지.
-- dialogue: 이 컷에서 들리는 대사 하나 {"who":통일 이름,"text":대사,"on_screen":입이 보이면 true}. 없으면 null.
-  대사 길이는 컷 길이 안에 들어가게(한국어 1초에 4음절).
+- action: 한 컷에 한 가지 상태·한 가지 행동. 확정형 한국어 문장. 화면에 보이는 대상(사물·화면)을 빠짐없이 씀. '살짝·약간·정도·또는·처럼 보·수 있' 금지.
+- action_en: action 과 같은 내용의 영어 한 문장 (이미지·영상 생성용). 보이는 대상을 빠짐없이. 'slightly·maybe·or' 금지.
+- dialogue: 이 컷에서 들리는 대사 {"who":통일 이름,"text":대사,"on_screen":입이 보이면 true}. 없으면 null.
 - screen_text: 휴대폰·모니터·문서에 보이는 글자. 그림에는 글자를 넣지 않고 편집에서 얹으므로 글자만 적음. 없으면 "".
 - chars: 화면에 보이는 인물(통일 이름). 손·뒷모습만 보이면 이름 뒤에 ':손' 또는 ':뒷모습'.
 - loc: 주어진 장소 id. sfx: 효과음 한 단어(없으면 "").
 - 대본에 없는 사건을 만들지 않음. 대사는 대본 문장 그대로.
 
 JSON 만 출력:
-{"cuts":[{"no":1,"scene":1,"size":"","angle":"","camera":"","dur":3.0,"motion":"","climax":false,
+{"cuts":[{"no":1,"scene":1,"size":"","angle":"","camera":"","dur":1.5,"motion":"","climax":false,
 "chars":[],"loc":"L01","action":"","action_en":"","dialogue":null,"screen_text":"","sfx":""}]}"""
 
 
@@ -83,7 +116,7 @@ def split(api_key: str, ep: dict, bible: dict | None, model: str = "") -> dict:
     import anthropic
     from json_repair import repair_json
     c = anthropic.Anthropic(api_key=api_key)
-    r = c.messages.create(model=model or DEFAULT_MODEL, max_tokens=6000, system=SYSTEM,
+    r = c.messages.create(model=model or DEFAULT_MODEL, max_tokens=12000, system=SYSTEM,
                           messages=[{"role": "user", "content": episode_text(ep, bible)}])
     txt = "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
     data = json.loads(repair_json(txt))
@@ -107,17 +140,32 @@ def canon(name: str, nm: dict) -> str:
     return nm.get(base.strip().replace(" ", ""), base.strip()) + (sep + part if sep else "")
 
 
+def need_sec(c: dict) -> float:
+    """대사가 들어갈 최소 길이 (한국어 1초 4음절 + 0.3초)."""
+    return syl(c["dialogue"]["text"]) / 4 + 0.3 if c.get("dialogue") else DUR_MIN
+
+
+def cap_sec(c: dict, last: bool = False) -> float:
+    """컷 하나의 최대 길이: 버티기 컷 6초, 말하는 얼굴 2.5초, 정지 컷 3초, 보통 4초. 대사가 더 길면 대사 길이."""
+    top = HOLD_MAX if c.get("climax") else STILL_MAX if c.get("motion") == "still" else DUR_MAX
+    if c.get("dialogue") and c["dialogue"].get("on_screen"):
+        top = TALK_MAX
+    return max(top, need_sec(c))
+
+
 def fit_durations(cuts: list, lo: float = 50, target: float = 56, hi: float = 70) -> list:
-    """대사 길이를 먼저 맞추고, 합계가 50초 미만이면 56초로, 70초 초과면 줄여서 맞춘다 (컷 하나 3~10초)."""
-    def need(c):
-        return syl(c["dialogue"]["text"]) / 4 + 1.0 if c.get("dialogue") else 3.0
-    for c in cuts:
-        c["dur"] = round(min(10.0, max(c["dur"], need(c), 3.0)), 1)
-    total = sum(c["dur"] for c in cuts)
-    if cuts and (total < lo or total > hi):
+    """대사 길이를 먼저 맞추고, 합계가 50초 미만이면 56초 쪽으로, 70초 초과면 줄여서 맞춘다.
+    컷마다 상한(cap_sec)이 있어서 늘릴 여유가 있는 컷만 늘어난다. 그래도 모자라면 점검에서 알린다."""
+    n = len(cuts)
+    for i, c in enumerate(cuts):
+        c["dur"] = round(min(cap_sec(c, i == n - 1), max(c["dur"], need_sec(c), DUR_MIN)), 1)
+    for _ in range(4):
+        total = sum(c["dur"] for c in cuts)
+        if not cuts or lo <= total <= hi:
+            break
         k = target / total
-        for c in cuts:
-            c["dur"] = round(min(10.0, max(need(c), 3.0, c["dur"] * k)), 1)
+        for i, c in enumerate(cuts):
+            c["dur"] = round(min(cap_sec(c, i == n - 1), max(need_sec(c), DUR_MIN, c["dur"] * k)), 1)
     return cuts
 
 
@@ -150,30 +198,47 @@ def normalize(cuts: list, ep: dict, bible: dict | None = None) -> list:
     return fit_durations(cap_video(out))
 
 
-def cap_video(cuts: list, limit: int = MAX_VIDEO) -> list:
-    """완전 영상 컷이 상한을 넘으면, 마지막 컷·클라이맥스가 아닌 것부터 '짧은 움직임'으로 낮춘다 (긴 컷부터)."""
-    if cuts:
-        cuts[-1]["motion"] = "video"
+def cap_video(cuts: list, limit: int = MAX_VIDEO, moving: int = MAX_MOVING) -> list:
+    """움직임 규칙을 코드로 강제한다.
+    - 마지막 컷·클라이맥스는 완전 영상. 클라이맥스(버티기 컷)는 화당 1개만 남김(가장 긴 컷).
+    - 말하는 얼굴이 보이는 컷은 정지 (립싱크 없음).
+    - 완전 영상이 상한을 넘으면 짧은 움직임으로, 영상 생성 컷 전체가 상한을 넘으면 짧은 컷부터 정지로 낮춘다."""
+    if not cuts:
+        return cuts
+    clx = [c for c in cuts if c["climax"]]
+    if len(clx) > 1:
+        keep = max(clx, key=lambda c: c["dur"])
+        for c in clx:
+            c["climax"] = c is keep
+    for c in cuts:
+        if c.get("dialogue") and c["dialogue"].get("on_screen"):
+            c["motion"] = "still"
+    cuts[-1]["motion"] = "video"
     for c in cuts:
         if c["climax"]:
             c["motion"] = "video"
+    locked = lambda c: c["climax"] or c is cuts[-1]
     vids = [c for c in cuts if c["motion"] == "video"]
     if len(vids) > limit:
-        spare = sorted((c for c in vids if not c["climax"] and c is not cuts[-1]), key=lambda c: -c["dur"])
-        for c in spare[: len(vids) - limit]:
+        for c in sorted((c for c in vids if not locked(c)), key=lambda c: -c["dur"])[: len(vids) - limit]:
             c["motion"] = "move"
+    mov = [c for c in cuts if c["motion"] in ("move", "video")]
+    if len(mov) > moving:
+        spare = sorted((c for c in mov if not locked(c)), key=lambda c: (c["motion"] == "video", c["dur"]))
+        for c in spare[: len(mov) - moving]:
+            c["motion"] = "still"
     return cuts
 
 
 def check(cuts: list, known_chars: set, known_locs: set, scenes: list | None = None) -> list[dict]:
-    """컷 목록 점검 → [{'id','level':'fix'|'todo','msg'}]"""
+    """컷 목록 점검 → [{'id','level':'fix'|'todo'|'info','msg'}]"""
     from src.imagegen import banned_in
     issues = []
     if not cuts:
         return [{"id": "-", "level": "fix", "msg": "컷이 없습니다"}]
     total = sum(c["dur"] for c in cuts)
-    if not (6 <= len(cuts) <= 8):
-        issues.append({"id": "-", "level": "todo", "msg": f"컷 {len(cuts)}개 (기준 6~8개)"})
+    if not (CUTS_LO <= len(cuts) <= CUTS_HI):
+        issues.append({"id": "-", "level": "todo", "msg": f"컷 {len(cuts)}개 (기준 14~16개, 허용 {CUTS_LO}~{CUTS_HI}개)"})
     if not (50 <= total <= 70):
         issues.append({"id": "-", "level": "todo", "msg": f"합계 {total:.1f}초 (기준 50~70초)"})
     if scenes:
@@ -181,32 +246,45 @@ def check(cuts: list, known_chars: set, known_locs: set, scenes: list | None = N
         if miss:
             issues.append({"id": "-", "level": "fix", "msg": "컷이 없는 장면: " + ", ".join(f"S#{n}" for n in miss)})
     nv = sum(1 for c in cuts if c["motion"] == "video")
+    nm = sum(1 for c in cuts if c["motion"] in ("move", "video"))
     if nv > MAX_VIDEO:
         issues.append({"id": "-", "level": "todo", "msg": f"완전 영상 컷 {nv}개 (상한 {MAX_VIDEO}개, 비용·실패 위험)"})
+    if nm > MAX_MOVING:
+        issues.append({"id": "-", "level": "todo", "msg": f"영상 생성 컷 {nm}개 (상한 {MAX_MOVING}개, 컷마다 최소 3초 과금)"})
+    if sum(1 for c in cuts if c["climax"]) > 1:
+        issues.append({"id": "-", "level": "todo", "msg": "버티기 컷(클라이맥스)이 2개 이상"})
     if cuts[-1]["motion"] != "video":
         issues.append({"id": cuts[-1]["id"], "level": "fix", "msg": "마지막 '끊김' 컷은 완전 영상이어야 함"})
     run = 0
     for c in cuts:
-        run = run + 1 if c["motion"] == "still" else 0
+        run = run + 1 if (c["motion"] == "still" and c["dur"] > 3.0) else 0
         if run > 2:
-            issues.append({"id": c["id"], "level": "fix", "msg": "정지 컷이 3개 연속 (PPT식으로 보임)"})
+            issues.append({"id": c["id"], "level": "fix", "msg": "3초 넘는 정지 컷이 3개 연속 (PPT식으로 보임)"})
         if c["climax"] and c["motion"] != "video":
             issues.append({"id": c["id"], "level": "fix", "msg": "클라이맥스 컷은 완전 영상이어야 함"})
+        if not c["climax"] and c["dur"] > DUR_MAX + 0.05 and not c.get("dialogue"):
+            issues.append({"id": c["id"], "level": "todo", "msg": f"{c['dur']}초: 4초 넘는 보통 컷 (둘로 나누면 호흡이 빨라짐)"})
         if c["size"] not in SIZES:
             issues.append({"id": c["id"], "level": "todo", "msg": f"샷 크기 '{c['size']}' 확인"})
         if c["loc"] and known_locs and c["loc"] not in known_locs:
             issues.append({"id": c["id"], "level": "fix", "msg": f"장소 id '{c['loc']}' 가 바이블에 없음"})
+        if len([x for x in c["chars"] if ":" not in x]) > 2:
+            issues.append({"id": c["id"], "level": "todo", "msg": "얼굴이 보이는 인물 3명 이상 (얼굴이 흔들릴 위험)"})
         for ch in c["chars"]:
             base = ch.split(":")[0]
             if known_chars and base not in known_chars:
                 issues.append({"id": c["id"], "level": "info", "msg": f"단역 '{base}' (바이블 밖 인물, 기준 이미지 없이 생성)"})
         d = c["dialogue"]
         if d:
-            need = syl(d["text"]) / 4 + 0.5
+            need = syl(d["text"]) / 4 + 0.2
             if need > c["dur"] + 0.05:
                 issues.append({"id": c["id"], "level": "fix", "msg": f"대사 {syl(d['text'])}음절: 최소 {need:.1f}초 필요 (현재 {c['dur']}초)"})
-            if d.get("on_screen") and c["motion"] == "still":
-                issues.append({"id": c["id"], "level": "fix", "msg": "입이 보이는 대사 컷이 정지 컷"})
+            if d.get("on_screen") and c["motion"] != "still":
+                issues.append({"id": c["id"], "level": "fix", "msg": "말하는 얼굴이 영상 컷 (립싱크 없음 → 정지 컷으로)"})
+            if d.get("on_screen") and c["dur"] > TALK_MAX + 0.05:
+                issues.append({"id": c["id"], "level": "todo", "msg": f"말하는 얼굴 {c['dur']}초 (2.5초 넘는 부분은 듣는 사람 컷으로 넘기기)"})
+        if WEAR_WORDS.search(c["action"]):
+            issues.append({"id": c["id"], "level": "fix", "msg": "몸에 거는 소품 표현 (손에 들거나 인서트로)"})
         for b in banned_in(c["action"] + " " + c.get("action_en", "")):
             issues.append({"id": c["id"], "level": "fix", "msg": f"행동 문장 금지어 {b}"})
     return issues
@@ -230,27 +308,28 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None)
              f"Scene: {c.get('action_en') or c['action']}",
              ("Characters: " + "; ".join(who) + ".") if who else "No people in frame.",
              f"Location: {place}" + (", background softly blurred." if tight else "."),
-             ("Reference images are identity and set references only: keep faces, outfits and the room exactly, "
-              "and take pose, framing and expression from this description.") if refs else "",
+             ("Reference images are identity and set references only: keep faces, hair, clothing and the room exactly, "
+              "wear no accessories even if a reference shows one, and take pose, framing and expression from this description.") if refs else "",
+            "Any prop named in the scene is held in the hands only, never worn.",
              f"Any screen or paper in frame is blank; text is added in editing." if c["screen_text"] else "No text anywhere in the image."]
     return " ".join(x for x in lines if x)
 
 
+def clip_seconds(dur: float) -> int:
+    """컷 길이 → 영상 모델에 줄 초 (3~15초 정수, 남는 부분은 편집에서 자름)."""
+    return max(3, min(15, math.ceil(float(dur or 3))))
+
+
 def video_prompt(c: dict, cast: dict) -> str:
     who = [cast.get(ch.split(":")[0], ch) for ch in c["chars"]]
-    d = c["dialogue"]
-    if not d:
-        dl = ""
-    elif d.get("on_screen"):
-        dl = f"Dialogue: {d['who']} speaks one short line in Korean; lips move naturally for {syl(d['text']) / 4 + 0.3:.1f} seconds."
-    else:
-        dl = "Dialogue: off-screen voice added in editing; nobody in frame moves their lips."
+    dl = "Any voice is added in editing: nobody in frame moves their lips, mouths stay closed." if c["dialogue"] else ""
     mv = {"still": "Almost no motion: only a slow camera move on the still image.",
-          "move": "Small natural motion only: blinking, breathing, a slight turn of the head or hand.",
+          "move": "Small natural motion only: blinking, breathing, a small turn of the head or hand. Mouth closed.",
           "video": "Full natural acting motion as described."}[c["motion"]]
     parts = [f"Shot: {SHOT_EN.get(c['size'], 'medium shot')}, {ANG_EN.get(c['angle'], 'eye level')}, vertical 9:16.",
              f"Camera: {CAM_EN.get(c['camera'], CAM_EN['고정'])}",
              ("Characters: " + "; ".join(who) + ".") if who else "",
              f"Action: {c.get('action_en') or c['action']}", mv, dl,
-             f"Duration: {c['dur']} seconds. Photoreal, natural light, no text on screen."]
+             "Keep the face, hair and clothing of the first frame unchanged for the whole clip; no new people enter the frame.",
+             f"Duration: {clip_seconds(c['dur'])} seconds. Photoreal, natural light, no text on screen."]
     return " ".join(x for x in parts if x)
