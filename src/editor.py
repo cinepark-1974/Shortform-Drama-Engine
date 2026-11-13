@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import re
+
 import base64
 import io
 import json
@@ -39,6 +41,13 @@ def font(size: int):
 
 def wrap(text: str, f, max_w: int, draw) -> list[str]:
     """글자 폭을 재서 줄을 나눈다. 띄어쓰기에서 먼저 끊고, 한 낱말이 너무 길면 글자 단위로."""
+    lines = []
+    for para in re.split(r"(?:\\n|[\r\n\u2028\u2029\v\f])+", str(text or "")):   # 줄바꿈이 든 글은 줄마다 따로 잰다
+        lines += _wrap_line(" ".join(para.split()), f, max_w, draw)
+    return lines
+
+
+def _wrap_line(text: str, f, max_w: int, draw) -> list[str]:
     lines, cur = [], ""
     for word in text.split(" "):
         t = (cur + " " + word).strip()
@@ -80,7 +89,7 @@ def overlay_png(ko: str = "", en: str = "", hook: str = "", ko_size: int = 60, e
             y += en_size + 10
     if hook:
         f = font(64)
-        lines = wrap(hook, f, W - 200, d)
+        lines = wrap(hook, f, W - 200, d) or [" "]
         bh = len(lines) * 80 + 36
         bw = max(d.textlength(ln, font=f) for ln in lines) + 72
         x0, y0 = (W - bw) / 2, int(H * 0.13)
