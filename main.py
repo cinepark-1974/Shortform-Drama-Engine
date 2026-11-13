@@ -676,11 +676,14 @@ elif cur == "cast":
     chars_all, locs_all = chars_ranked(work), locs_ranked(work)
     a, b = stage_counts(work)["cast"]
     brief("cast", f"확정 {cast_split(work)}" + (" · 캐스팅 완료" if b and a >= b else ""))
-    picks = [(f"CAST_FINAL/{c}_ref_{vw}.jpg", k) for c, v in work.get("cast", {}).items() for vw, k in sheet_of(v).items()] + \
-            [(f"MAKEUP_COSTUME/{c}_{ln}_{vw}.jpg", k) for c, v in work.get("cast", {}).items()
+    picks = [(f"01_CAST_FINAL/{c}_ref_{vw}.jpg", k) for c, v in work.get("cast", {}).items() for vw, k in sheet_of(v).items()] + \
+            [(f"02_MAKEUP_COSTUME/{c}_{ln}_{vw}.jpg", k) for c, v in work.get("cast", {}).items()
              for ln, li in (v.get("looks") or {}).items() for vw, k in sheet_of(li).items()] + \
-            [(f"PROP/{n}.jpg", v["pick"]) for n, v in work.get("props", {}).items() if v.get("pick")] + \
-            [(f"LOCATION_MASTER/{lid}_{next((l['name'] for l in B['locations'] if l['id'] == lid), '')}_master.jpg", v["pick"])
+            [(f"04_PROP/{n}.jpg", v["pick"]) for n, v in work.get("props", {}).items() if v.get("pick")] + \
+            [(f"03_LOCATION_MASTER/{lid}_{next((l['name'] for l in B['locations'] if l['id'] == lid), '')}_view_{vn}.jpg", vi["pick"])
+             for lid, v in work.get("loc", {}).items() for vn, vi in (v.get("views") or {}).items() if vi.get("pick")] + \
+            [(f"05_EMBLEM/{n}.jpg", k) for n, k in (work.get("emblems") or {}).items()] + \
+            [(f"03_LOCATION_MASTER/{lid}_{next((l['name'] for l in B['locations'] if l['id'] == lid), '')}_master.jpg", v["pick"])
              for lid, v in work.get("loc", {}).items() if v.get("pick")]
     if picks:
         def _zip():
@@ -693,7 +696,7 @@ elif cur == "cast":
                         z.writestr(re.sub(r'[\\:*?"<>|·]', "_", name).replace(" ", "_"), d)
             return buf.getvalue()
         st.download_button(f"확정 그림 {len(picks)}장 내려받기 (드라이브용 이름 정리, zip)", _zip, file_name=f"casting_{work['id']}.zip",
-                           mime="application/zip", help="CAST_FINAL·LOCATION_MASTER 폴더로 나뉘고, 이름이 '인물_ref_front', '장소번호_장소_master' 로 정리됩니다. 압축을 풀어 드라이브 작업 폴더에 그대로 올리면 됩니다.")
+                           mime="application/zip", help="01_CAST_FINAL · 02_MAKEUP_COSTUME · 03_LOCATION_MASTER · 04_PROP · 05_EMBLEM 폴더로 나뉘고, 이름이 '인물_ref_front', '장소번호_장소_master' 로 정리됩니다. 압축을 풀어 드라이브 작업 폴더에 그대로 올리면 됩니다.")
     t_char, t_loc, t_prop = st.tabs(["인물", "장소 (마스터)", "소품"])
     stt = bb.stats(B, parsed)
 
