@@ -23,7 +23,8 @@ API = os.environ.get("REPLICATE_API_BASE", "https://api.replicate.com/v1")   # ì
 DEFAULT_MODEL = "kwaivgi/kling-v3-video"
 NEGATIVE = ("text, letters, Chinese characters, Korean characters, phone interface, screen turning on, subtitles, captions, watermark, logo, distorted face, face morphing, identity change, "
             "extra fingers, deformed hands, flicker, jitter, cartoon, CGI, 3D render, talking, lip movement, "
-            "lanyard, ID badge, jewelry, wristwatch, earphones, new person entering, outfit change")
+            "lanyard, ID badge, jewelry, wristwatch, earphones, new person entering, outfit change, "
+            "static image, frozen frame, still photo, slideshow, motionless person")
 DONE = {"succeeded", "failed", "canceled"}
 
 

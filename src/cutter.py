@@ -698,8 +698,9 @@ def video_prompt(c: dict, cast: dict) -> str:
           "movement and blinking. Everybody else keeps the mouth closed. No sound is needed." if talk else
           "Any voice is added in editing: nobody in frame moves their lips, mouths stay closed." if c["dialogue"] else "")
     mv = {"still": "Almost no motion: only a slow camera move on the still image.",
-          "move": "One small, simple movement only, as described; everything else stays still." + ("" if talk else " Mouth closed."),
-          "video": "Full natural acting motion as described."}[c["motion"]]
+          "move": f"One simple, clearly visible body movement as described, starting in the first second and completed within {c['dur']} seconds; "
+                  "the background stays steady." + ("" if talk else " Mouth closed."),
+          "video": "Full natural acting motion as described, starting in the first second and continuing through the clip."}[c["motion"]]
     if c.get("motion0") == "still" and c.get("chars"):      # 정지 컷으로 짜였던 컷: 살아 있는 촬영 화면처럼
         mv += " This is a live film take, not a frozen photo: the people breathe, blink and shift their weight slightly; hair and fabric move a little."
     parts = [f"Shot: {SHOT_EN.get(c['size'], 'medium shot')}, {ANG_EN.get(c['angle'], 'eye level')}, vertical 9:16.",

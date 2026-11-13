@@ -2,7 +2,10 @@
 
 방식 (Streamlit 메모리 1GB 안에서 돌도록 컷 하나씩 따로 만든 뒤 이어 붙임)
 1. 타임라인: 컷 길이 = max(콘티 길이, 더빙 길이 + 0.25초).
-2. 컷마다 ffmpeg 한 번: 영상 컷은 잘라 쓰고(모자라면 마지막 장면을 늘림), 정지 컷은 스틸에 카메라 움직임(줌·팬)을 넣는다.
+2. 컷마다 ffmpeg 한 번: 영상 컷은 잘라 쓰고, 정지 컷은 스틸에 카메라 움직임(줌·팬)을 넣는다.
+   (2026-11-14) 영상 컷은 검수에서 찾은 '인물이 가장 많이 움직이는 구간'부터 쓴다 (클립 앞부분이 멈춰 있는 경우 대비).
+   영상이 컷보다 짧으면 마지막 장면을 멈춰 늘리지 않고, 먼저 시작점을 당기고, 그래도 모자라면 최대 1.5배까지 천천히 재생한다.
+   그래도 모자란 부분만 마지막 장면을 늘리고, 몇 초를 늘렸는지 기록한다 (frozen).
    자막(한/영)·첫머리 훅 자막은 투명 PNG로 만들어 위에 얹는다. 더빙은 0.1초 뒤에 시작한다.
 3. 화면 글자 컷(휴대폰·모니터): 글자를 스틸의 화면 위치에 먼저 그려 넣은 뒤 카메라 움직임을 넣는다 (글자가 화면과 함께 움직임).
 4. 이어 붙이기: 같은 규격(1080x1920, 30fps, AAC 44.1kHz)이라 다시 인코딩하지 않고 붙인다.
@@ -193,17 +196,44 @@ def _zoom(camera: str, n: int) -> str:
     return f"z='1+0.04*on/{n}':x='{cx}':y='{cy}'"            # 고정·핸드헬드: 아주 느린 다가감 (완전히 멈춘 그림은 죽어 보임)
 
 
+MAX_SLOW = 1.5                 # 영상이 모자랄 때 늘려 재생하는 최대 배율
+
+
+def clip_plan(clip_len: float, dur: float, start: float = 0.0) -> dict:
+    """영상 컷을 어디서부터, 몇 배 느리게 쓸지. → {'start','slow','frozen'(마지막 장면을 멈춰 늘린 초)}"""
+    if clip_len <= 0:
+        return {"start": 0.0, "slow": 1.0, "frozen": round(dur, 2)}
+    start = max(0.0, min(float(start or 0), clip_len - 0.1))
+    if clip_len - start < dur:                          # 1) 시작점을 당겨 뒷부분을 확보
+        start = max(0.0, clip_len - dur)
+    rest = clip_len - start
+    slow = 1.0 if rest >= dur else min(MAX_SLOW, dur / rest)   # 2) 천천히 재생
+    frozen = max(0.0, dur - rest * slow)                # 3) 그래도 모자란 초
+    return {"start": round(start, 2), "slow": round(slow, 3), "frozen": round(frozen, 2)}
+
+
+def probe_len(path: str) -> float:
+    try:
+        p = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                           capture_output=True, text=True, timeout=60)
+        return float(p.stdout.strip() or 0)
+    except Exception:
+        return 0.0
+
+
 def render_cut(out_path: str, dur: float, still: bytes | None = None, clip: bytes | None = None, camera: str = "고정",
-               overlay: bytes | None = None, audio: bytes | None = None, workdir: str = "") -> None:
-    """컷 하나를 1080x1920 mp4 로. clip 이 있으면 영상 컷, 없으면 still 정지 컷."""
+               overlay: bytes | None = None, audio: bytes | None = None, workdir: str = "", clip_start: float = 0.0) -> dict:
+    """컷 하나를 1080x1920 mp4 로. clip 이 있으면 영상 컷, 없으면 still 정지 컷. → 영상 컷이면 clip_plan 결과."""
     d = workdir or os.path.dirname(out_path)
     n = max(1, int(round(dur * FPS)))
-    args, fc = ["ffmpeg", "-v", "error", "-y"], []
+    args, fc, plan = ["ffmpeg", "-v", "error", "-y"], [], {}
     if clip:
         src = os.path.join(d, "src.mp4")
         open(src, "wb").write(clip)
-        args += ["-i", src]
-        fc.append(f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS},"
+        plan = clip_plan(probe_len(src), dur, clip_start)
+        args += (["-ss", f"{plan['start']:.2f}"] if plan["start"] else []) + ["-i", src]
+        slow = f"setpts={plan['slow']:.3f}*(PTS-STARTPTS)," if plan["slow"] > 1.0 else "setpts=PTS-STARTPTS,"
+        fc.append(f"[0:v]{slow}scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS},"
                   f"tpad=stop_mode=clone:stop_duration={dur:.2f},setsar=1[v0]")
     else:
         src = os.path.join(d, "src.jpg")
@@ -234,6 +264,7 @@ def render_cut(out_path: str, dur: float, still: bytes | None = None, clip: byte
     p = subprocess.run(args, capture_output=True, text=True, timeout=600)
     if p.returncode != 0 or not os.path.exists(out_path):
         raise RuntimeError(f"ffmpeg: {p.stderr[-400:]}")
+    return plan
 
 
 def concat(paths: list[str], out_path: str) -> None:
@@ -272,8 +303,13 @@ def render_episode(cuts: list, get, stills: dict, clips: dict, dub: dict, subs: 
             sub = os.path.join(td, f"c{i:02d}")
             os.makedirs(sub, exist_ok=True)
             out = os.path.join(td, f"p{i:02d}.mp4")
-            render_cut(out, seg["dur"], still=None if use_clip else still, clip=get(cell["key"]) if use_clip else None,
-                       camera=c.get("camera", "고정"), overlay=ov, audio=au, workdir=sub)
+            q = (cell.get("qc_by") or {}).get(cell.get("key")) or cell.get("qc") or {}
+            plan = render_cut(out, seg["dur"], still=None if use_clip else still, clip=get(cell["key"]) if use_clip else None,
+                              camera=c.get("camera", "고정"), overlay=ov, audio=au, workdir=sub,
+                              clip_start=float((q.get("motion") or {}).get("start", 0) or 0))
+            seg["kind"] = "clip" if use_clip else "still"
+            if plan:
+                seg.update({"clip_start": plan["start"], "slow": plan["slow"], "frozen": plan["frozen"]})
             parts.append(out)
         final = os.path.join(td, "final.mp4")
         concat(parts, final)

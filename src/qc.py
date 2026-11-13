@@ -4,6 +4,9 @@
 - 스틸: 방금 만든 그림 + 그 컷의 기준 그림(인물 확정·장소 마스터) + 지시문 → 항목별 판정.
   불합격이면 이유를 고치는 영어 문장(fix_en)을 지시문에 붙여 다시 만든다 (컷당 최대 2회, main.py).
 - 영상: 테이크에서 뽑은 첫·중간·마지막 장면 3장 + 확정 스틸 → 얼굴·의상 유지, 인물 추가, 글자, 손 판정.
+- 영상 움직임 (2026-11-14 추가): '정지 사진에 카메라만 움직인 영상'이 영상으로 통과되던 문제를 막는다.
+  Claude 에게 보내기 전에 엔진이 직접 앞뒤 장면 차이를 잰다 (motion). 카메라 줌·팬을 맞춘 뒤에도 남는 변화 = 인물이 실제로 움직인 양.
+  편집에서 실제로 쓰는 구간(컷 길이만큼)에서 재고, 클립 안에서 가장 많이 움직이는 구간의 시작 시각을 찾아 편집에 넘긴다.
 
 Claude 이미지 입력 형식: messages content 에 {"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":…}}.
 그림은 긴 변 768px 로 줄여 보낸다 (판정에는 충분하고 비용을 줄임).
@@ -37,6 +40,7 @@ CLIP_ITEMS = {
     "anatomy": "손가락·팔·얼굴이 뭉개지거나 녹지 않았다",
     "lips": "말하지 않는 컷에서 입을 크게 움직이지 않는다",
     "action": "'일어나야 할 움직임'이 일어난다 (정지된 채로 끝나거나 엉뚱한 동작이 아니다)",
+    "motion": "인물·사물이 실제로 움직인다. 카메라만 다가가거나 흔들리고 사람은 사진처럼 멈춰 있으면 불합격 (편집에서 쓰는 구간 기준)",
 }
 
 # 검수 응답에 고치는 문장(fix_en)이 비었을 때 항목별로 붙이는 기본 문장
@@ -51,6 +55,7 @@ GENERIC_FIX = {
     "prop": "The hand prop is exactly the object described in the props line, same type, color and shape.",
     "people": "No new person enters the frame during the clip.",
     "lips": "Mouths stay closed for the whole clip.",
+    "motion": "From the very first second the character physically performs the action with continuous, clearly visible body movement; live-action footage, not a still photo with camera movement.",
 }
 
 STILL_SYSTEM = """당신은 한국 실사 드라마 숏폼의 스크립터(연속성 담당)입니다. 방금 생성된 컷 그림 한 장을 검수합니다.
@@ -91,11 +96,14 @@ CLIP_SYSTEM = """당신은 한국 실사 드라마 숏폼의 영상 검수자입
 
 항목마다 합격(true)/불합격(false)을 판정합니다. 애매하면 합격입니다. 분명히 틀린 것만 불합격으로 합니다.
 - 카메라 이동으로 크기·구도가 바뀌는 것은 정상입니다. 얼굴과 옷이 다른 사람처럼 바뀐 것만 불합격입니다.
+- 예외: action·motion 두 항목은 애매하면 불합격입니다. 장면들 사이에서 팔·손·고개·몸의 위치가 바뀌었는지 직접 비교합니다.
+  카메라만 다가가거나 옆으로 흐르고 인물의 자세가 모든 장면에서 같으면 '정지 사진에 카메라만 움직인 것'이므로 motion 불합격입니다.
+- 엔진이 잰 움직임 수치가 함께 오면 참고합니다 (인물 움직임 수치가 낮으면 정지일 가능성이 큽니다).
 
 불합격 항목마다 reason(한국어 한 문장)과 fix_en(다시 만들 때 영상 지시문 끝에 붙일 영어 확정형 한 문장).
 
 JSON 만 출력:
-{"items":{"identity":true,"people":true,"text":true,"anatomy":true,"lips":true,"action":true},
+{"items":{"identity":true,"people":true,"text":true,"anatomy":true,"lips":true,"action":true,"motion":true},
  "fails":[{"item":"","reason":"","fix_en":""}]}"""
 
 
@@ -170,20 +178,18 @@ def judge_still(api_key: str, still: bytes, refs: list[tuple[str, bytes]], cut: 
     return _result(_ask(api_key, STILL_SYSTEM, content, model, base_url), ITEMS)
 
 
-def frames(video: bytes) -> list[bytes]:
-    """영상에서 첫·중간·마지막 장면 3장을 JPG 로 (ffmpeg). 실패하면 빈 목록."""
+def frames(video: bytes, times: list[float] | None = None) -> list[bytes]:
+    """영상에서 장면을 JPG 로 (ffmpeg). times 가 없으면 첫·중간·마지막 3장. 실패하면 빈 목록."""
     with tempfile.TemporaryDirectory() as td:
         src = os.path.join(td, "in.mp4")
         with open(src, "wb") as f:
             f.write(video)
-        try:
-            p = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", src],
-                               capture_output=True, text=True, timeout=60)
-            dur = float(p.stdout.strip() or 0)
-        except Exception:
+        dur = duration(src)
+        if dur <= 0:
             return []
         out = []
-        for i, t in enumerate([0.05, dur / 2, max(0.0, dur - 0.15)]):
+        for i, t in enumerate(times or [0.05, dur / 2, max(0.0, dur - 0.15)]):
+            t = max(0.0, min(float(t), dur - 0.1))
             dst = os.path.join(td, f"f{i}.jpg")
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{t:.2f}", "-i", src, "-frames:v", "1",
                             "-vf", f"scale='min({SIDE},iw)':-2", dst], capture_output=True, timeout=60)
@@ -193,22 +199,168 @@ def frames(video: bytes) -> list[bytes]:
         return out
 
 
+def duration(path: str) -> float:
+    try:
+        p = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                           capture_output=True, text=True, timeout=60)
+        return float(p.stdout.strip() or 0)
+    except Exception:
+        return 0.0
+
+
+# ── 움직임 측정 ──────────────────────────────────────────────
+# 영상을 1초에 MFPS 장, 가로 MW x 세로 MH 흑백으로 줄인 뒤, 0.5초 떨어진 두 장면을 비교한다.
+#  total   : 그냥 뺀 차이 (카메라가 움직여도 커짐)
+#  subject : 앞 장면을 확대·축소(줌)하고 상하좌우로 밀어(팬) 뒤 장면에 가장 잘 맞춘 뒤에도 남는 차이
+#            → 카메라 움직임을 빼고 남은 '인물·사물의 실제 움직임'
+# 수치 단위: 0~255 밝기 차이의 평균. 압축 잡음만 있는 정지 영상은 대략 0.3 안팎.
+MFPS, MW, MH, GAP = 6, 96, 160, 3            # GAP 장 = 0.5초 간격으로 비교
+FROZEN_TOTAL = 0.6                          # 화면 전체 변화가 이보다 작으면 '화면 정지'
+STILL_SUBJECT = 0.9                         # 카메라를 맞춘 뒤 남는 변화가 이보다 작으면 '카메라만 움직임'
+WEAK_SUBJECT = 1.8                          # 이보다 작으면 움직임이 약함 → Claude 판정에 수치를 함께 보냄
+
+
+def _gray_frames(path: str, start: float = 0.0, length: float = 0.0):
+    import numpy as np
+    args = ["ffmpeg", "-v", "error"] + (["-ss", f"{start:.2f}"] if start else []) + ["-i", path] \
+        + (["-t", f"{length:.2f}"] if length else []) \
+        + ["-vf", f"fps={MFPS},scale={MW}:{MH}:flags=area,format=gray", "-f", "rawvideo", "-"]
+    p = subprocess.run(args, capture_output=True, timeout=120)
+    n = len(p.stdout) // (MW * MH)
+    if n < 2:
+        return None
+    return np.frombuffer(p.stdout[: n * MW * MH], dtype=np.uint8).reshape(n, MH, MW).astype(np.float32)
+
+
+def _pair(a, b) -> tuple[float, float]:
+    """두 장면 → (total, subject). 가운데 부분만 비교해 가장자리(줌·팬으로 새로 드러나는 곳)를 뺀다.
+    subject: 앞 장면을 화면 가운데 기준으로 확대·축소하고 밀어서(소수 픽셀 단위) 뒤 장면에 가장 잘 맞춘 뒤 남는 차이."""
+    import numpy as np
+    from PIL import Image, ImageFilter
+    m = 12                                       # 가장자리 여백(픽셀)
+    ia = Image.fromarray(a.astype(np.uint8)).filter(ImageFilter.GaussianBlur(1))
+    cb = np.asarray(Image.fromarray(b.astype(np.uint8)).filter(ImageFilter.GaussianBlur(1)), dtype=np.float32)[m:MH - m, m:MW - m]
+    cx, cy = MW / 2, MH / 2
+
+    def diff(sc, tx, ty):
+        w = ia.transform((MW, MH), Image.AFFINE, (1 / sc, 0, cx - (cx + tx) / sc, 0, 1 / sc, cy - (cy + ty) / sc), Image.BILINEAR)
+        return float(np.abs(np.asarray(w, dtype=np.float32)[m:MH - m, m:MW - m] - cb).mean())
+
+    total = diff(1.0, 0, 0)
+    best = (total, 1.0, 0.0, 0.0)
+    for sc in (0.96, 0.97, 0.98, 0.99, 1.01, 1.02, 1.03, 1.04):          # 1) 줌
+        best = min(best, (diff(sc, 0, 0), sc, 0.0, 0.0))
+    s0 = best[1]
+    for ty in range(-6, 7):                                             # 2) 팬 (1픽셀 단위)
+        for tx in range(-6, 7):
+            best = min(best, (diff(s0, tx, ty), s0, float(tx), float(ty)))
+    _, s1, x1, y1 = best
+    for sc in (s1 - 0.005, s1, s1 + 0.005):                             # 3) 소수 단위 다듬기
+        for ty in (y1 - 0.5, y1, y1 + 0.5):
+            for tx in (x1 - 0.5, x1, x1 + 0.5):
+                best = min(best, (diff(sc, tx, ty), sc, tx, ty))
+    raw = float(np.abs(a[m:MH - m, m:MW - m] - b[m:MH - m, m:MW - m]).mean())
+    return raw, best[0]
+
+
+def motion(video: bytes, use_sec: float = 0.0) -> dict:
+    """영상 움직임 측정 → {'ok','dur','start','use','total','subject','verdict'}.
+    use_sec = 편집에서 실제로 쓰는 길이(컷 길이). 클립 안에서 인물이 가장 많이 움직이는 use_sec 구간을 찾고
+    (start = 그 구간의 시작 초), 그 구간의 수치로 판정한다.
+    verdict: 'frozen'(화면 정지) / 'camera_only'(카메라만 움직임) / 'weak'(약함) / 'moving'(정상) / 'error'(읽기 실패)"""
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "in.mp4")
+        with open(src, "wb") as f:
+            f.write(video)
+        dur = duration(src)
+        fr = _gray_frames(src) if dur > 0 else None
+        if fr is None or len(fr) <= GAP:
+            return {"ok": False, "verdict": "error", "dur": dur, "start": 0.0, "use": 0.0, "total": 0.0, "subject": 0.0}
+        pairs = [_pair(fr[i], fr[i + GAP]) for i in range(len(fr) - GAP)]     # pairs[i] = i/MFPS 초 ~ +0.5초
+        use = min(float(use_sec or dur), dur)
+        span = max(1, int(round(use * MFPS)) - GAP)            # 구간 안에 들어가는 비교 쌍 수
+        span = min(span, len(pairs))
+        best_i, best_v = 0, -1.0
+        for i in range(0, len(pairs) - span + 1):
+            v = sum(p[1] for p in pairs[i:i + span]) / span
+            if v > best_v + 0.05:                              # 비슷하면 앞쪽 구간을 고른다
+                best_i, best_v = i, v
+        win = pairs[best_i:best_i + span]
+        total = sum(p[0] for p in win) / len(win)
+        subject = sum(p[1] for p in win) / len(win)
+        start = round(min(best_i / MFPS, max(0.0, dur - use)), 2)
+        if total < FROZEN_TOTAL:
+            verdict = "frozen"
+        elif subject < STILL_SUBJECT:
+            verdict = "camera_only"
+        elif subject < WEAK_SUBJECT:
+            verdict = "weak"
+        else:
+            verdict = "moving"
+        return {"ok": verdict in ("weak", "moving"), "verdict": verdict, "dur": round(dur, 2), "start": start,
+                "use": round(use, 2), "total": round(total, 2), "subject": round(subject, 2)}
+
+
+MOTION_KO = {"frozen": "화면이 멈춰 있음 (정지화면)", "camera_only": "카메라만 움직이고 인물은 멈춰 있음 (정지 사진에 카메라 움직임)",
+             "weak": "움직임 약함", "moving": "움직임 정상", "error": "영상을 읽지 못함"}
+
+
+def gentle(cut: dict) -> bool:
+    """움직임이 원래 작은 컷: 정지 컷에서 영상으로 올린 컷(숨·눈 깜빡임 정도), 말하는 얼굴 컷(입만 움직임).
+    이런 컷은 '카메라만 움직임' 판정을 바로 불합격으로 하지 않고 Claude 가 장면을 보고 판정한다. 화면 정지는 그대로 불합격."""
+    return cut.get("motion0") == "still" or bool(cut.get("talk"))
+
+
+def hard_fail(m: dict, cut: dict) -> bool:
+    """Claude 에게 묻지 않고 바로 불합격으로 할 움직임 판정."""
+    return m["verdict"] in ("frozen", "error") or (m["verdict"] == "camera_only" and not gentle(cut))
+
+
+def use_seconds(cut: dict) -> float:
+    """편집에서 쓰는 길이: 말하는 컷은 대사 길이(clip_sec), 나머지는 컷 길이."""
+    return float(cut.get("clip_sec") or cut.get("dur") or 0)
+
+
+def motion_label(m: dict | None) -> str:
+    if not m:
+        return ""
+    return (f"{MOTION_KO.get(m.get('verdict'), '')} · 인물 {m.get('subject', 0)} / 화면 {m.get('total', 0)}"
+            + (f" · {m['start']}초부터 사용" if m.get("start") else ""))
+
+
 def judge_clip(api_key: str, video: bytes, still: bytes, cut: dict, prompt: str,
-               model: str = "", base_url: str | None = None) -> dict:
-    """영상 테이크 검수 → judge_still 과 같은 형식. 장면을 못 뽑으면 합격 처리하고 note 를 남긴다."""
-    fr = frames(video)
+               model: str = "", base_url: str | None = None, use_sec: float = 0.0) -> dict:
+    """영상 테이크 검수 → judge_still 과 같은 형식 + 'motion'(움직임 수치).
+    1) 엔진이 움직임을 직접 잰다. 화면 정지·카메라만 움직임·읽기 실패는 Claude 에게 묻지 않고 바로 불합격.
+    2) 움직임이 있으면 편집에서 쓰는 구간의 장면 4장을 Claude 가 본다 (얼굴·인물·글자·손·입·동작·움직임)."""
+    use = float(use_sec or use_seconds(cut))
+    m = motion(video, use)
+    if hard_fail(m, cut):
+        fix = GENERIC_FIX["motion"]
+        return {"pass": False, "items": {**{k: True for k in CLIP_ITEMS}, "motion": False},
+                "fails": [{"item": "motion", "reason": MOTION_KO[m["verdict"]], "fix_en": fix}], "motion": m}
+    a, b = m["start"], m["start"] + m["use"]
+    fr = frames(video, [a + 0.05, a + (b - a) / 3, a + 2 * (b - a) / 3, b - 0.1])
     if len(fr) < 2:
-        return {"pass": True, "items": {}, "fails": [], "note": "장면 추출 실패로 검수 생략"}
+        return {"pass": False, "items": {**{k: True for k in CLIP_ITEMS}, "motion": False},
+                "fails": [{"item": "motion", "reason": MOTION_KO["error"], "fix_en": GENERIC_FIX["motion"]}], "motion": m}
     head = (f"[컷 {cut.get('id')}] 움직임 종류: {cut.get('motion')}\n"
             f"첫 장면: {cut.get('frame_ko') or cut.get('action')}\n"
             f"일어나야 할 움직임: {cut.get('motion_ko') or cut.get('motion_en') or cut.get('action')}\n"
             f"대사: {'있음 — 말하는 얼굴이 보이는 컷: 말하는 인물의 입이 움직이는 것이 정상(lips 합격)' if cut.get('talk') else '있음 (목소리는 편집에서, 입은 다문 채)' if cut.get('dialogue') else '없음'}\n"
+            f"편집에서 쓰는 구간: {a:.1f}초 ~ {b:.1f}초 (아래 장면 4장이 이 구간)\n"
+            f"엔진이 잰 움직임: 인물 {m['subject']} / 화면 전체 {m['total']} (인물 {STILL_SUBJECT} 미만 = 정지, {WEAK_SUBJECT} 미만 = 약함)\n"
             "\n검수 항목:\n" + "\n".join(f"- {k}: {v}" for k, v in CLIP_ITEMS.items())
             + f"\n\n영상 지시문(참고):\n{prompt[:2000]}")
     content = [{"type": "text", "text": head}, {"type": "text", "text": "확정 스틸:"}, _img(still)]
-    for label, f in zip(["첫 장면", "중간 장면", "마지막 장면"], fr):
+    for label, f in zip(["구간 첫 장면", "구간 1/3 장면", "구간 2/3 장면", "구간 마지막 장면"], fr):
         content += [{"type": "text", "text": f"테이크 {label}:"}, _img(f)]
-    return _result(_ask(api_key, CLIP_SYSTEM, content, model, base_url), CLIP_ITEMS)
+    try:
+        res = _result(_ask(api_key, CLIP_SYSTEM, content, model, base_url), CLIP_ITEMS)
+    except Exception as ex:                     # Claude 오류: 움직임 수치는 통과했으므로 합격으로 두고 이유를 남김
+        res = {"pass": True, "items": {k: True for k in CLIP_ITEMS}, "fails": [], "note": f"검수 오류: {str(ex)[:120]}"}
+    res["motion"] = m
+    return res
 
 
 def fix_prompt(prompt: str, res: dict) -> str:

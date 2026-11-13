@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.2"
+VERSION = "v1.2.1"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -1701,7 +1701,7 @@ elif cur == "clip":
         cell = rec.get(c["id"], {})
         return bool(cell.get("key") and cell.get("still") and cell["still"] != srec.get(c["id"], {}).get("pick"))
 
-    missing = [c for c in moving if not rec.get(c["id"], {}).get("key") or stale(c)]
+    missing = [c for c in moving if not rec.get(c["id"], {}).get("key") or stale(c) or rec.get(c["id"], {}).get("rescan_bad")]
     running = {cid: r["get"] for cid, r in rec.items() if r.get("get") and r.get("status") not in videogen.DONE}
 
     cutmap = {c["id"]: c for c in cuts}
@@ -1710,21 +1710,60 @@ elif cur == "clip":
         return bool(cell.get("fallback")) and not cell.get("qc_ok")
 
     def finish():
-        ok = all(rec.get(c["id"], {}).get("key") and not stale(c) for c in moving)
+        ok = all(rec.get(c["id"], {}).get("key") and not stale(c) and not rec[c["id"]].get("rescan_bad") for c in moving)
         e_s = eps_state.setdefault(str(ep_no), {})
         e_s["clip"] = "done" if ok else "doing"
         e_s["clip_qc"] = sum(1 for c in moving if clip_bad(rec.get(c["id"], {})))
         save(work)
 
+    def motion_only(c, data):
+        """Claude 검수를 끈 상태에서도 움직임(정지화면 여부)만은 엔진이 직접 잰다."""
+        m = qc.motion(data, qc.use_seconds(c))
+        if not qc.hard_fail(m, c):
+            return {"pass": True, "items": {}, "fails": [], "note": "움직임만 확인 (Claude 검수 꺼짐)", "motion": m}
+        return {"pass": False, "items": {"motion": False}, "motion": m,
+                "fails": [{"item": "motion", "reason": qc.MOTION_KO[m["verdict"]], "fix_en": qc.GENERIC_FIX["motion"]}]}
+
     def judge_take(cid, data):
         c = cutmap[cid]
         still = img_bytes(srec.get(cid, {}).get("pick", "")) if srec.get(cid, {}).get("pick") else None
-        if not (AUTO_QC and still):
-            return None
         try:
-            return qc.judge_clip(KEYS["ANTHROPIC_API_KEY"], data, still, c, rec[cid].get("prompt", ""), MODEL)
+            if not (AUTO_QC and still):
+                return motion_only(c, data)
+            return qc.judge_clip(KEYS["ANTHROPIC_API_KEY"], data, still, c, rec[cid].get("prompt", ""), MODEL, use_sec=qc.use_seconds(c))
         except Exception as ex:
             return {"pass": True, "items": {}, "fails": [], "note": f"검수 오류: {str(ex)[:120]}"}
+
+    def motion_of(cell) -> dict | None:
+        return ((cell.get("qc_by") or {}).get(cell.get("key")) or cell.get("qc") or {}).get("motion")
+
+    def rescan():
+        """이미 만든 영상(움직임 검사 전 테이크)을 다시 재서, 정지화면·카메라만 움직인 컷을 찾아 표시한다."""
+        found = []
+        for c in moving:
+            cell = rec.get(c["id"], {})
+            if not cell.get("key") or stale(c):
+                continue
+            data = img_bytes(cell["key"])
+            if not data:
+                continue
+            m = qc.motion(data, qc.use_seconds(c))
+            q = dict((cell.get("qc_by") or {}).get(cell["key"]) or cell.get("qc") or {"pass": True, "items": {}, "fails": []})
+            q["motion"] = m
+            if qc.hard_fail(m, c):
+                q["pass"] = False
+                q["items"] = {**(q.get("items") or {}), "motion": False}
+                q["fails"] = [f for f in (q.get("fails") or []) if f.get("item") != "motion"] + [
+                    {"item": "motion", "reason": qc.MOTION_KO[m["verdict"]], "fix_en": qc.GENERIC_FIX["motion"]}]
+                if not cell.get("qc_ok"):
+                    cell["fallback"] = True
+                    cell["rescan_bad"] = True
+                    cell["prompt"] = qc.fix_prompt(cell.get("prompt") or cutter.video_prompt(c, castdesc), q)
+                    found.append(c["id"])
+            cell.setdefault("qc_by", {})[cell["key"]] = q
+            cell["qc"] = q
+        finish()
+        return found
 
     def collect(jobs, box):
         """진행 중인 예측을 끝까지 기다렸다가 영상을 저장소에 넣고 자동 검수한다.
@@ -1808,7 +1847,8 @@ elif cur == "clip":
             label = f"EP {ep_no} 영상 만들기 ({len(missing)}컷)" if missing else f"EP {ep_no} 영상 완료 · {len(moving)}컷"
             if st.button(label, type="primary", disabled=not (TOKEN and missing)):
                 with st.status(f"EP {ep_no} 영상 {len(missing)}개 생성 시작…") as box:
-                    jobs = launch([(c, cutter.video_prompt(c, castdesc)) for c in missing])
+                    jobs = launch([(c, rec[c["id"]].get("prompt") if rec.get(c["id"], {}).get("rescan_bad") and rec[c["id"]].get("prompt")
+                                    else cutter.video_prompt(c, castdesc)) for c in missing])
                     if jobs:
                         collect(jobs, box)
                     box.update(label="생성 끝", state="complete")
@@ -1818,6 +1858,17 @@ elif cur == "clip":
     st.caption(f"모델 {VMODEL} · 확정 스틸을 첫 프레임으로 씁니다. 영상 {len(moving)}컷 · 합계 {sec_all}초 (이번에 만들 분량 {len(missing)}컷 · {sec_todo}초). "
                "컷마다 3초부터 초 단위로 과금됩니다. 말하는 컷은 대사 길이만큼 만들고 입이 움직입니다(대사와 정확히 맞추는 립싱크는 아직 없음). "
                "화면 글자 컷만 정지 그림으로 둡니다. 버튼 한 번에 한 화만 진행합니다.")
+    unscanned = [c for c in moving if rec.get(c["id"], {}).get("key") and not motion_of(rec[c["id"]])]
+    fb = [c["id"] for c in moving if clip_bad(rec.get(c["id"], {}))]
+    if fb:
+        st.warning(f"정지+카메라로 바뀐 컷 {len(fb)}개: {', '.join(fb)} — 이 컷은 완성본에서 영상이 아니라 스틸에 카메라 움직임만 들어갑니다. "
+                   "'영상 만들기'로 다시 만들거나, 판정이 틀렸으면 컷 아래 '영상 그대로 쓰기'를 누르세요.")
+    if st.button(f"이 화 영상 움직임 검사{f' (미측정 {len(unscanned)}컷)' if unscanned else ''}", disabled=not any(rec.get(c['id'], {}).get('key') for c in moving),
+                 help="이미 만든 영상에서 인물이 실제로 움직이는지 엔진이 직접 잽니다. 정지화면이거나 카메라만 움직인 컷은 다시 만들 컷으로 표시합니다."):
+        with st.spinner("움직임 재는 중… (컷당 2~5초)"):
+            bad = rescan()
+        st.toast(f"정지화면·카메라만 움직인 컷 {len(bad)}개" + (f": {', '.join(bad)}" if bad else ""))
+        st.rerun()
 
     cols = st.columns(4)
     for i, c in enumerate(cuts):
@@ -1848,6 +1899,8 @@ elif cur == "clip":
                 v = img_bytes(cell["key"])
                 if v:
                     st.video(v)
+                mo = motion_of(cell)
+                st.markdown(f"<div class='small'>{qc.motion_label(mo) if mo else '움직임 미측정 (위의 움직임 검사)'}</div>", unsafe_allow_html=True)
                 if clip_bad(cell) and st.button("영상 그대로 쓰기", key=f"vok_{c['id']}", help="검수 판정이 틀렸을 때 사람이 통과시킵니다."):
                     cell["qc_ok"] = True
                     finish()
@@ -2119,7 +2172,9 @@ else:
         """편집에 들어간 재료의 지문. 재료(스틸·영상·더빙·자막·컷 길이)가 바뀌면 달라진다 → 다시 렌더링할 화로 표시."""
         import hashlib
         parts = [json.dumps([[c["id"], c["dur"], c["motion"], c.get("camera"), c.get("screen_text"), (c.get("dialogue") or {}).get("text")] for c in cuts], ensure_ascii=False),
-                 json.dumps({c["id"]: [srec.get(c["id"], {}).get("pick"), crec.get(c["id"], {}).get("key"), drec.get(c["id"], {}).get("key")] for c in cuts}),
+                 json.dumps({c["id"]: [srec.get(c["id"], {}).get("pick"), crec.get(c["id"], {}).get("key"), drec.get(c["id"], {}).get("key"),
+                                       bool(crec.get(c["id"], {}).get("fallback")) and not crec.get(c["id"], {}).get("qc_ok"),
+                                       (((crec.get(c["id"], {}).get("qc_by") or {}).get(crec.get(c["id"], {}).get("key")) or {}).get("motion") or {}).get("start")] for c in cuts}),
                  json.dumps(sub.get("lines", {}), ensure_ascii=False, sort_keys=True), hook, str(work.get("edit_en", True))]
         return hashlib.md5("|".join(parts).encode()).hexdigest()[:12]
 
@@ -2196,7 +2251,8 @@ else:
                         fk = f"works/{work['id']}/final/ep{ep_no:03d}_{uuid.uuid4().hex[:6]}.mp4"
                         store.put_bytes(fk, mp4, "video/mp4")
                         finals[k] = {"key": fk, "sig": edit_sig(), "sec": round(tl[-1]["start"] + tl[-1]["dur"], 1), "mb": round(len(mp4) / 1e6, 1),
-                                     "at": now(), "takes": (fin.get("takes") or []) + [fk]}
+                                     "at": now(), "takes": (fin.get("takes") or []) + [fk],
+                                     "plan": {c["id"]: {x: seg.get(x) for x in ("kind", "clip_start", "slow", "frozen")} for c, seg in zip(cuts, tl)}}
                         eps_state.setdefault(k, {})["edit"] = "done"
                         eps_state[k]["sub"] = "done"            # 영어 자막 없이 렌더링해도 자막 단계는 끝난 것으로 본다
                         eps_state[k].pop("master", None)
@@ -2223,6 +2279,13 @@ else:
                 for c, seg in zip(cuts, tl):
                     cell = crec.get(c["id"]) or {}
                     kind = "영상" if c["motion"] != "still" and cell.get("key") and not (cell.get("fallback") and not cell.get("qc_ok")) else "정지+카메라"
+                    if c["motion"] != "still" and kind == "정지+카메라":
+                        kind = "<span style='color:var(--fix)'>정지+카메라 (영상 불합격)</span>"
+                    pl = (fin.get("plan") or {}).get(c["id"]) or {}
+                    if pl.get("kind") == "clip":
+                        kind += (f" · {pl['clip_start']}초부터" if pl.get("clip_start") else "") + (f" · {pl['slow']}배 느리게" if (pl.get("slow") or 1) > 1 else "")
+                        if (pl.get("frozen") or 0) > 0.1:
+                            kind += f" · <span style='color:var(--fix)'>마지막 장면 {pl['frozen']}초 멈춤</span>"
                     st.markdown(f"<div class='small'>{seg['start']:>5.1f}s · {c['id']} · {seg['dur']}s · {kind}"
                                 + (f" · {c['dialogue']['who']}: {c['dialogue']['text'][:24]}" if c.get("dialogue") else "")
                                 + (f" · 화면 글자: {c['screen_text'][:16]}" if c.get("screen_text") else "") + "</div>", unsafe_allow_html=True)
