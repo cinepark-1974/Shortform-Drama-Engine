@@ -61,6 +61,8 @@ STILL_SYSTEM = """당신은 한국 실사 드라마 숏폼의 스크립터(연�
 - identity 는 얼굴형·눈·머리 모양·앞머리·옷 종류와 색으로 봅니다. 조명·표정·각도 차이는 불합격 사유가 아닙니다.
 - 기준 그림에 장신구·목걸이가 있어도 컷 그림에는 없어야 합격입니다 (props).
 - 지시문에 손에 든 소품(방문증, 휴대폰, 서류)이 있으면 손에 든 것은 합격, 목에 걸었으면 불합격입니다.
+- 분장·의상: 인물 기준 그림은 그 컷에 배정된 룩의 그림입니다. 머리 모양·옷이 기준 그림과 다르면 identity 불합격입니다.
+  다만 생성 지시문에 "replaced by this look"이 있으면 그 인물의 기준 그림은 얼굴만 기준이고, 머리·옷은 지시문의 look 설명과 비교합니다.
 - '엠블럼' 이름표가 붙은 기준 그림은 벽에 걸린 회사 엠블럼의 정확한 모양입니다. 컷 그림에 엠블럼이 보이는데 모양이 다르거나,
   엠블럼이 둘 이상이거나, 옆에 글자가 있으면 set 불합격입니다. 엠블럼이 화면에 안 보이는 것은 합격입니다.
 - '소품:' 이름표가 붙은 기준 그림은 그 소품의 생김새입니다. 컷 그림 속 소품이 다른 종류의 물건이면 prop 불합격입니다. 소품이 없는 컷은 prop 합격.
@@ -140,6 +142,7 @@ def judge_still(api_key: str, still: bytes, refs: list[tuple[str, bytes]], cut: 
             f"영어: {cut.get('frame_en') or cut.get('action_en')}\n"
             f"화면에 보이는 인물: {', '.join(cut.get('chars') or []) or '없음'}\n"
             f"손에 든 소품: {', '.join(cut.get('props') or []) or '없음'}\n"
+            f"분장·의상(룩): {', '.join(f'{w} = {l}' for w, l in (cut.get('looks') or {}).items()) or '기본'}\n"
             + (f"화면 글자(편집에서 얹음, 그림엔 빈 화면): {cut['screen_text']}\n" if cut.get("screen_text") else "")
             + (f"대사: {d['who']} {d['text']}\n" if d else "")
             + "\n검수 항목:\n" + "\n".join(f"- {k}: {v}" for k, v in ITEMS.items())

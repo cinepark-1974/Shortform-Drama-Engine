@@ -1,4 +1,4 @@
-"""BLUE JEANS · SHORTFORM DRAMA ENGINE  (숏폼드라마 엔진) v0.7
+"""BLUE JEANS · SHORTFORM DRAMA ENGINE  (숏폼드라마 엔진) v0.8
 
 1인 운영 자동화 엔진. Shortform-Engine 대본 → 작품 정리 → 캐스팅 → 회당 컷 분할 → 스틸 → 영상 → 더빙 → 자막 → 편집 → 마스터.
 v0.2 범위: 01 대본(작품 정리·정리본 내보내기) · 02 캐스팅 · 03 회당 컷 분할. 04 이후는 자리만.
@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v0.7.1"
+VERSION = "v0.8"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -207,6 +207,29 @@ def sheet_of(info: dict) -> dict:
     if info.get("views_of") == info["pick"]:
         out.update({k: v for k, v in (info.get("views") or {}).items() if v})
     return out
+
+
+def look_info(work: dict, name: str, look: str | None):
+    """인물의 분장·의상(룩) 정보. '기본'이거나 등록되지 않은 룩이면 None (확정 캐스팅 그림을 씀)."""
+    if not look or look == "기본":
+        return None
+    return (work.get("cast", {}).get(name, {}).get("looks") or {}).get(look)
+
+
+def look_text(work: dict, c: dict) -> dict:
+    """컷에 배정된 룩 → {인물: (영어 설명, 룩 기준 그림이 있는가)}. 스틸 지시문에 들어간다."""
+    out = {}
+    for w, l in (c.get("looks") or {}).items():
+        li = look_info(work, w, l)
+        if li and li.get("prompt_en"):
+            out[w] = (li["prompt_en"], bool(li.get("pick")))
+    return out
+
+
+def look_notes(work: dict) -> dict:
+    """콘티에 넘기는 룩 목록 {인물: {룩 이름: 한 줄 설명}}."""
+    return {n: {k: (v.get("note") or v.get("prompt_en", ""))[:120] for k, v in (info.get("looks") or {}).items()}
+            for n, info in work.get("cast", {}).items() if info.get("pick")}
 
 
 def view_for(ch: str, c: dict) -> str:
@@ -592,6 +615,9 @@ elif cur == "cast":
     a, b = stage_counts(work)["cast"]
     brief("cast", f"확정 {cast_split(work)}" + (" · 캐스팅 완료" if b and a >= b else ""))
     picks = [(f"CAST_FINAL/{c}_ref_{vw}.jpg", k) for c, v in work.get("cast", {}).items() for vw, k in sheet_of(v).items()] + \
+            [(f"MAKEUP_COSTUME/{c}_{ln}_{vw}.jpg", k) for c, v in work.get("cast", {}).items()
+             for ln, li in (v.get("looks") or {}).items() for vw, k in sheet_of(li).items()] + \
+            [(f"PROP/{n}.jpg", v["pick"]) for n, v in work.get("props", {}).items() if v.get("pick")] + \
             [(f"LOCATION_MASTER/{lid}_{next((l['name'] for l in B['locations'] if l['id'] == lid), '')}_master.jpg", v["pick"])
              for lid, v in work.get("loc", {}).items() if v.get("pick")]
     if picks:
@@ -649,11 +675,13 @@ elif cur == "cast":
             upf = st.file_uploader("직접 올리기", type=["png", "jpg", "jpeg", "webp"], key=f"u_{kind}_{key}", label_visibility="collapsed")
         if go:
             with st.status(f"{label} 후보 {n_cand}장 생성 중… (장당 30초~1분)") as s:
-                g_prompt, g_refs = prompt, None
+                g_prompt, g_refs, g_style = prompt, None, {"cast": "ref", "prop": "prop"}.get(kind, "location")
+                if kind == "cast" and info.get("_face"):            # 분장·의상(룩): 확정 얼굴을 기준 그림으로 넣고 머리·분장·옷만 바꾼다
+                    g_prompt, g_refs, g_style = imagegen.LOOK_SAME + prompt, [("face.jpg", img_bytes(info["_face"]))], "sheet"
                 if kind == "loc" and info.get("_emblem"):          # 벽 엠블럼(회사 CI)을 기준 그림으로 넣어 마스터를 만든다
                     g_prompt = cutter.no_logo_words(prompt) + " " + cutter.EMBLEM_MASTER
                     g_refs = [("emblem.jpg", img_bytes(info["_emblem"]))]
-                for r in gen_many([g_prompt] * n_cand, aspect, {"cast": "ref", "prop": "prop"}.get(kind, "location"), g_refs):
+                for r in gen_many([g_prompt] * n_cand, aspect, g_style, g_refs):
                     if isinstance(r, Exception):
                         st.error(str(r))
                         continue
@@ -757,6 +785,42 @@ elif cur == "cast":
                     save(work)
                     st.rerun()
 
+    def looks_board(c, info):
+        """분장·의상 (Make-up & Costume): 인물마다 머리·분장·옷 묶음(룩)을 여러 개 고정해 둔다.
+        '기본'은 위에서 확정한 캐스팅 그림의 차림. 콘티가 장면마다 룩 하나를 고르고, 그 룩의 그림이 컷의 기준 그림이 된다."""
+        looks = info.setdefault("looks", {})
+        st.markdown(f"**분장·의상 (Make-up & Costume)** <span class='small'>기본 = 위 확정 그림의 차림 · 추가 룩 {len(looks)}개. "
+                    "집·출근·환자복처럼 장면에 따라 바뀌는 차림을 등록합니다. 주연 3~4개, 조연 1~2개가 적당합니다.</span>", unsafe_allow_html=True)
+        l1, l2, l3 = st.columns([1, 3, 1])
+        with l1:
+            ln = st.text_input("룩 이름", placeholder="집", key=f"lk_name_{c}")
+        with l2:
+            lm = st.text_input("머리·분장·의상 메모 (한국어)", placeholder="머리를 풀고 화장기 없는 얼굴, 아이보리 맨투맨, 회색 트레이닝 바지, 맨발", key=f"lk_note_{c}")
+        with l3:
+            st.write("")
+            if st.button("룩 추가", key=f"lk_add_{c}", disabled=not (ln.strip() and ln.strip() != "기본" and KEYS.get("ANTHROPIC_API_KEY"))) \
+                    and ln.strip() not in looks:
+                with st.spinner("분장·의상 설명을 쓰는 중…"):
+                    d = cutter.look_desc(KEYS["ANTHROPIC_API_KEY"], c, ln.strip(), lm.strip(), info.get("prompt_en", ""), MODEL)
+                looks[ln.strip()] = {"prompt_en": d, "note": lm.strip()}
+                save(work)
+                st.rerun()
+        for name in list(looks):
+            li = looks[name]
+            state = "그림 확정" if li.get("pick") else "그림 없음 · 글 설명으로만 들어감"
+            st.markdown(f"<div class='cut'><div class='h'>{c} · {name} <span class='tag {'ok' if li.get('pick') else 'todo'}'>{state}</span></div>"
+                        f"<div class='s'>{li.get('note', '')}</div></div>", unsafe_allow_html=True)
+            if st.toggle("이 룩 열기", key=f"lk_open_{c}_{name}", value=not li.get("pick")):
+                li["_face"] = info["pick"]
+                asset_board("cast", f"{c}__{name}", f"{c} · {name}", li, "3:4", 2)
+                li.pop("_face", None)
+                if li.get("pick"):
+                    sheet_board(f"{c}__{name}", li)
+                if st.button("이 룩 삭제", key=f"lk_del_{c}_{name}"):
+                    looks.pop(name)
+                    save(work)
+                    st.rerun()
+
     with t_char:
         main_n = st.slider("기준 이미지를 만들 인물 수 (대사 많은 순)", 1, max(1, len(chars_all)), min(work.get("main_n", 6), max(1, len(chars_all))))
         if main_n != work.get("main_n"):
@@ -796,6 +860,7 @@ elif cur == "cast":
                 asset_board("cast", c, c, info, "3:4", 4)
                 if info.get("pick"):
                     sheet_board(c, info)
+                    looks_board(c, info)
 
     with t_loc:
         loc_n = st.slider("마스터를 만들 장소 수 (장면 많은 순)", 1, max(1, len(locs_all)), min(work.get("loc_n", 8), max(1, len(locs_all))))
@@ -934,6 +999,9 @@ elif cur == "cut":
         for n, d in (r.get("props") or {}).items():
             work.setdefault("props", {}).setdefault(n, {"prompt_en": d})
             propdesc.setdefault(n, d)
+        for x in r.get("new_looks") or []:            # 콘티가 새로 등록한 분장·의상 (그림은 02 캐스팅에서 만든다)
+            if x["who"] in work.get("cast", {}):
+                work["cast"][x["who"]].setdefault("looks", {}).setdefault(x["name"], {"prompt_en": x["desc_en"], "note": x["note_ko"]})
 
     def store_cuts(ep_no: int, cuts: list, src: str, changes: list | None = None):
         """콘티 저장. 콘티가 바뀌면 컷 번호의 내용이 달라지므로 그 화의 스틸·영상은 보관함(stills_old·clips_old)으로 옮기고 처음부터."""
@@ -961,7 +1029,7 @@ elif cur == "cut":
         if st.button("이 화 콘티 만들기" if str(ep_no) not in allcuts else "이 화 콘티 다시 만들기", type="primary", disabled=not KEYS.get("ANTHROPIC_API_KEY"),
                      help="다시 만들면 이 화의 기존 스틸·영상은 보관함으로 옮기고 새 콘티로 처음부터 만듭니다."):
             with st.spinner(f"EP {ep_no} 콘티 만드는 중… 컷 나누기 → 감수 (1~2분)"):
-                r = cutter.split(KEYS["ANTHROPIC_API_KEY"], ep, B, MODEL, props=propdesc)
+                r = cutter.split(KEYS["ANTHROPIC_API_KEY"], ep, B, MODEL, props=propdesc, looks=look_notes(work))
             add_props(r)
             store_cuts(ep_no, r["cuts"], r["model"], r.get("changes"))
             save(work)
@@ -973,7 +1041,7 @@ elif cur == "cut":
         if todo and st.button(f"다음 화 콘티 (EP {todo[0]})", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
             n = todo[0]
             with st.spinner(f"EP {n} 콘티 만드는 중… 컷 나누기 → 감수 (1~2분)"):
-                r = cutter.split(KEYS["ANTHROPIC_API_KEY"], parsed["episodes"][n - 1], B, MODEL, props=propdesc)
+                r = cutter.split(KEYS["ANTHROPIC_API_KEY"], parsed["episodes"][n - 1], B, MODEL, props=propdesc, looks=look_notes(work))
             add_props(r)
             store_cuts(n, r["cuts"], r["model"], r.get("changes"))
             save(work)
@@ -1020,11 +1088,12 @@ elif cur == "cut":
                         f"{clx}</div>"
                         f"<div class='a'>{c['action']}</div>"
                         f"<div class='s'><b>첫 장면</b> {c.get('frame_ko') or c['action']}</div>"
+                        + (f"<div class='s'><b>분장·의상</b> {', '.join(f'{w} · {l}' for w, l in c['looks'].items())}</div>" if c.get("looks") else "") +
                         f"<div class='s'><b>움직임</b> {c.get('motion_ko') or ('카메라만 움직인다' if c['motion'] == 'still' else c.get('motion_en', ''))}</div>{dl}{stx}<div class='s'>{c['loc']} {loc} · 인물 {', '.join(c['chars']) or '없음'}"
                         f"{' · 효과음 ' + c['sfx'] if c['sfx'] else ''}</div></div>", unsafe_allow_html=True)
             with st.expander(f"{c['id']} 지시문 보기"):
                 st.markdown("**스틸 지시문** (gpt-image-2, 기준 그림 함께)")
-                st.code(cutter.still_prompt(c, castdesc, locdesc, None, propdesc), language=None)
+                st.code(cutter.still_prompt(c, castdesc, locdesc, None, propdesc, look_text(work, c)), language=None)
                 st.markdown("**영상 지시문**")
                 st.code(cutter.video_prompt(c, castdesc), language=None)
         with st.expander("컷 데이터 직접 고치기 (JSON)"):
@@ -1058,7 +1127,8 @@ elif cur == "still":
         out = []
         for ch in c["chars"]:
             base = ch.split(":")[0]
-            sh = sheet_of(work.get("cast", {}).get(base, {}))
+            li = look_info(work, base, (c.get("looks") or {}).get(base))
+            sh = sheet_of(li if li and li.get("pick") else work.get("cast", {}).get(base, {}))   # 룩 그림이 있으면 그 룩의 시트
             if not sh or base in [n for n, _ in out]:
                 continue
             v = view_for(ch, c)
@@ -1177,7 +1247,7 @@ elif cur == "still":
         label = f"EP {ep_no} 스틸 만들기 ({len(missing)}컷)" if missing else f"EP {ep_no} 스틸 완료 · {picked}/{len(cuts)}컷 확정"
         if st.button(label, type="primary", disabled=not (KEYS.get("OPENAI_API_KEY") and missing)):
             with st.status(f"EP {ep_no} 스틸 {len(missing) * n_c}장 생성{' · 자동 검수' if AUTO_QC else ''} 중… (4컷씩 동시, 2~6분)") as s:
-                make([(c, cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc), refs_for(c)) for c in missing])
+                make([(c, cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c)), refs_for(c)) for c in missing])
                 finish()
                 s.update(label="생성 완료", state="complete")
             st.rerun()
@@ -1196,7 +1266,7 @@ elif cur == "still":
                     try:
                         return qc.judge_still(KEYS["ANTHROPIC_API_KEY"], img_bytes(cell["pick"]),
                                               [(n, img_bytes(k)) for n, k in refs_for(c)], c,
-                                              cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc), MODEL)
+                                              cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c)), MODEL)
                     except Exception as ex:
                         return {"pass": True, "items": {}, "fails": [], "note": f"검수 오류: {str(ex)[:120]}"}
                 with ThreadPoolExecutor(4) as ex:
@@ -1213,7 +1283,7 @@ elif cur == "still":
         if st.button(f"불합격 컷 고치기 ({len(bad_cuts)}컷)", disabled=not (KEYS.get("OPENAI_API_KEY") and bad_cuts),
                      type="primary" if bad_cuts else "secondary"):
             with st.status(f"불합격 {len(bad_cuts)}컷을 고쳐 다시 만드는 중… (컷당 최대 {1 + QC_RETRY}회)") as s:
-                make([(c, qc.fix_prompt(rec[c["id"]].get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc),
+                make([(c, qc.fix_prompt(rec[c["id"]].get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c)),
                                         rec[c["id"]]["qc"]), refs_for(c)) for c in bad_cuts])
                 finish()
                 s.update(label="다시 만들기 완료", state="complete")
@@ -1250,6 +1320,7 @@ elif cur == "still":
             st.markdown(f"<div class='cut'><div class='h'>{c['id']} · {c['size']}<span class='d'>{c['dur']}s</span> "
                         f"<span class='tag {'mv' if c['motion'] == 'video' else 'ok'}'>{cutter.MOTIONS[c['motion']]}</span></div>"
                         f"<div class='s'><b>첫 장면</b> {c.get('frame_ko') or c['action']}</div>"
+                        + (f"<div class='s'><b>분장·의상</b> {', '.join(f'{w} · {l}' for w, l in c['looks'].items())}</div>" if c.get("looks") else "") +
                         f"<div class='s'>기준 그림: {', '.join(n for n, _ in refs) or '없음 (지시문만)'}</div>{qtag}</div>", unsafe_allow_html=True)
             if cell.get("pick"):
                 data = img_bytes(cell["pick"])
@@ -1275,7 +1346,7 @@ elif cur == "still":
                             finish()
                             st.rerun()
             with st.expander("지시문 · 다시 만들기"):
-                base_p = cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs], propdesc)
+                base_p = cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs], propdesc, look_text(work, c))
                 if cell.get("prompt") and st.button("지시문 새로 쓰기 (지금 규칙·소품·기준 그림으로)", key=f"snew_{c['id']}",
                                                     help="예전 규칙으로 만든 지시문을 버리고 새로 조립합니다. 그다음 '이 컷 다시'를 누르세요."):
                     cell.pop("prompt", None)

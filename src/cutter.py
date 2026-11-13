@@ -77,6 +77,12 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 - 휴대폰·모니터 화면은 화면이 카메라를 향하게만 쓰고, 화면 글자는 screen_text 에만 적음.
 - 로고·간판·회사 이름은 그림 AI가 컷마다 다르게 그리므로 frame 에 쓰지 않음. 회사 로고가 보여야 하는 컷은 "벽의 엠블럼"이라고만 쓰고
   회사 이름·글자는 쓰지 않음 (엠블럼 모양은 장소 기준 그림이 정함).
+- 분장·의상(Make-up & Costume): 인물의 머리·분장·옷은 [분장·의상] 목록의 '룩'이 정함. 컷의 looks 에 {"인물":"룩 이름"}을 적음.
+  목록에 있는 이름만 그대로 쓰고, 적지 않으면 '기본'(확정 캐스팅 그림의 차림). 한 장면(S#) 안에서 한 인물의 룩은 하나.
+  장소·시간에 맞는 룩을 고름(집 장면에 '집' 룩이 있으면 그것, 회사 장면은 그 시기의 출근 룩). frame 에는 옷·머리 묘사를 따로 쓰지 않음.
+  목록에 없는 차림이 대본상 꼭 필요할 때만(잠옷, 환자복, 상복, 몇 년 뒤의 모습) 맨 위 new_looks 에 등록함:
+  who(인물), name(짧은 한국어 이름 "집", "환자복"), note_ko(머리·분장·의상 한 줄), desc_en("Hair: …. Make-up: …. Clothing: …." 영어 확정형,
+  장신구·로고·글자 없는 단색 옷). 새 룩은 한 화에 인물당 1개까지.
 - 손에 드는 소품(가방, 휴대폰, 서류, 방문증, 컵)은 [소품 목록]의 이름을 그대로 쓰고, 그 컷의 props 에 이름을 적음.
   목록에 없는 소품이 필요하면 맨 위 props 에 새로 등록함: name(한국어, 주인 포함 "세영의 노트북 가방"), desc_en(영어 확정형 한 문장:
   종류·색·재질·크기·손잡이·드는 방법. 예 "a slim black nylon laptop briefcase with two short handles, carried by the handles in one hand").
@@ -102,9 +108,9 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 - 대본에 없는 사건을 만들지 않음. 대사는 대본 문장 그대로.
 
 JSON 만 출력:
-{"props":[{"name":"","desc_en":""}],
+{"props":[{"name":"","desc_en":""}],"new_looks":[{"who":"","name":"","note_ko":"","desc_en":""}],
 "cuts":[{"no":1,"scene":1,"size":"","angle":"","camera":"","dur":1.5,"motion":"","climax":false,
-"chars":[],"props":[],"loc":"L01","action":"","frame_ko":"","frame_en":"","motion_ko":"","motion_en":"","dialogue":null,"screen_text":"","sfx":""}]}"""
+"chars":[],"looks":{},"props":[],"loc":"L01","action":"","frame_ko":"","frame_en":"","motion_ko":"","motion_en":"","dialogue":null,"screen_text":"","sfx":""}]}"""
 
 REVIEW = """당신은 한국 실사 숏폼 드라마의 콘티 감수자입니다. 감독이 짠 콘티(JSON)를 받아, 그림 생성 AI가 실패하지 않도록 고칩니다.
 
@@ -119,6 +125,7 @@ REVIEW = """당신은 한국 실사 숏폼 드라마의 콘티 감수자입니�
 7. frame 에 회사 이름·로고 글자·간판 글자가 있으면 "벽의 엠블럼"으로 바꾸거나 뺌.
 8. 손에 든 소품이 frame 에 나오는데 그 컷 props 에 이름이 없으면 채움. 같은 가방·휴대폰이 컷마다 다른 말(가방/서류가방/노트북 가방)로
    적혀 있으면 [소품 목록]·props 의 이름 하나로 통일. 같은 장면에서 가방을 든 인물이 다음 컷에서 빈손이면 고침.
+9. 같은 장면에서 한 인물의 looks 가 컷마다 다르면 하나로 통일. frame 에 옷·머리 묘사가 있으면 뺌 (looks 가 정함). looks 필드는 지우지 않음.
 
 컷을 나누면 길이(dur)를 나눠 담고, 대사는 원문을 그대로 나눠 담음. 고칠 것이 없는 컷은 그대로 둠.
 컷 번호(no)는 처음부터 다시 매김. 다른 필드 형식과 규칙(컷 수 14~16, 합계 50~70초)은 감독 콘티와 같음.
@@ -130,12 +137,14 @@ def syl(t: str) -> int:
     return len(re.findall(r"[가-힣]", re.sub(r"\([^)]*\)", "", t or "")))
 
 
-def episode_text(ep: dict, bible: dict | None, props: dict | None = None) -> str:
+def episode_text(ep: dict, bible: dict | None, props: dict | None = None, looks: dict | None = None) -> str:
     from src import bible as bb
     names = [c["name"] for c in (bible or {}).get("characters", [])]
     plist = "; ".join(f"{n} = {d}" for n, d in (props or {}).items()) or "(아직 없음. 필요한 소품은 props 에 새로 등록)"
     out = [f"[인물 표기] {', '.join(names)}  (chars·dialogue.who 에는 이 이름만 그대로 씀. 목록에 없는 단역은 '신입A'처럼 짧게)",
            f"[소품 목록] {plist}",
+           "[분장·의상] " + ("; ".join(f"{n}: 기본(확정 캐스팅 그림의 차림)" + "".join(f", {k}({v})" for k, v in lk.items())
+                                        for n, lk in (looks or {}).items()) or "모든 인물 '기본' 하나"),
            f"EP {ep['ep']} | {ep['emotion']}", f"[훅 자막] {ep['hook']}"]
     for s in ep["scenes"]:
         loc = bb.loc_of(bible, ep["ep"], s["no"])
@@ -159,9 +168,11 @@ def _ask(api_key: str, system: str, text: str, model: str = "") -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def split(api_key: str, ep: dict, bible: dict | None, model: str = "", review: bool = True, props: dict | None = None) -> dict:
+def split(api_key: str, ep: dict, bible: dict | None, model: str = "", review: bool = True, props: dict | None = None,
+          looks: dict | None = None) -> dict:
+    """looks = {인물: {룩 이름: 한 줄 설명}} (기본 룩 제외). 돌려주는 new_looks = 콘티가 새로 등록한 룩."""
     """콘티 만들기: ① 감독(컷 나누기) → ② 감수(첫 장면이 사진 한 장으로 찍히는지 점검·수정) → ③ 코드 규칙 정리."""
-    src = episode_text(ep, bible, props)
+    src = episode_text(ep, bible, props, looks)
     first = _ask(api_key, SYSTEM, src, model)
     cuts = first.get("cuts", [])
     new_props = [x for x in (first.get("props") or []) if isinstance(x, dict) and x.get("name")]
@@ -178,11 +189,33 @@ def split(api_key: str, ep: dict, bible: dict | None, model: str = "", review: b
     for x in new_props:                               # 이미 등록된 소품의 설명은 바꾸지 않는다 (화마다 같은 물건)
         known.setdefault(str(x["name"]).strip(), str(x.get("desc_en", "")).strip())
     out = normalize(cuts, ep, bible)
+    nm = name_map(bible)
+    new_looks, ok_looks = [], {n: set(lk) for n, lk in (looks or {}).items()}
+    for x in (first.get("new_looks") or []):
+        if isinstance(x, dict) and x.get("who") and x.get("name") and x.get("desc_en"):
+            who, name = canon(str(x["who"]), nm), str(x["name"]).strip()
+            if name != "기본" and name not in ok_looks.get(who, set()):
+                ok_looks.setdefault(who, set()).add(name)
+                new_looks.append({"who": who, "name": name, "note_ko": str(x.get("note_ko", "")).strip(), "desc_en": str(x["desc_en"]).strip()})
     for c in out:
         c["props"] = [n for n in c["props"] if n in known]
+        c["looks"] = {w: l for w, l in c["looks"].items() if l in ok_looks.get(w, set())}
     used = {n for c in out for n in c["props"]}
-    return {"cuts": out, "model": model or DEFAULT_MODEL, "changes": changes,
+    return {"cuts": out, "model": model or DEFAULT_MODEL, "changes": changes, "new_looks": new_looks,
             "props": {n: d for n, d in known.items() if n in used or n in (props or {})}}
+
+
+LOOK_SYSTEM = """한국 실사 드라마의 분장·의상(Make-up & Costume) 담당입니다. 인물의 룩 하나를 영어 확정형으로 씁니다.
+그림 생성 AI가 매번 같은 차림을 그리도록 머리 모양, 분장, 옷을 구체적으로 정합니다.
+- 형식: "Hair: …. Make-up: …. Clothing: …." 세 문장.
+- 옷은 무늬 없는 단색, 차분한 색. 브랜드·로고·글자 없음. 장신구·시계·머리핀·이어폰 없음. 신발까지 정함.
+- 얼굴 생김새·나이는 쓰지 않음 (확정 캐스팅 그림이 정함). 'or', 'slightly', 'maybe' 금지.
+JSON 만 출력: {"desc_en": ""}"""
+
+
+def look_desc(api_key: str, who: str, name: str, note: str = "", base: str = "", model: str = "") -> str:
+    return str(_ask(api_key, LOOK_SYSTEM, f"인물: {who}\n룩 이름: {name}\n메모(머리·분장·의상): {note or '없음'}\n"
+                                          f"기본 차림 참고: {base[:400]}", model).get("desc_en", "")).strip()
 
 
 PROP_SYSTEM = """한국 실사 드라마의 소품 담당입니다. 소품 이름과 메모를 받아, 그림 생성 AI가 매번 같은 물건을 그리도록 영어 확정형 한 문장으로 씁니다.
@@ -223,6 +256,25 @@ def name_map(bible: dict | None) -> dict:
 def canon(name: str, nm: dict) -> str:
     base, sep, part = name.partition(":")
     return nm.get(base.strip().replace(" ", ""), base.strip()) + (sep + part if sep else "")
+
+
+def unify_looks(cuts: list) -> list:
+    """한 장면 안에서 한 인물의 룩은 하나: 그 장면에서 가장 많이 적힌 룩으로 통일한다 (옷이 컷마다 바뀌는 것을 막음)."""
+    from collections import Counter
+    by = {}
+    for c in cuts:
+        for ch in c["chars"]:
+            w = ch.split(":")[0]
+            by.setdefault((c["scene"], w), Counter())[c.get("looks", {}).get(w, "")] += 1
+    for c in cuts:
+        looks = {}
+        for ch in c["chars"]:
+            w = ch.split(":")[0]
+            top = by[(c["scene"], w)].most_common(1)[0][0]
+            if top:
+                looks[w] = top
+        c["looks"] = looks
+    return cuts
 
 
 def need_sec(c: dict) -> float:
@@ -277,6 +329,8 @@ def normalize(cuts: list, ep: dict, bible: dict | None = None) -> list:
             "motion": c.get("motion") if c.get("motion") in MOTIONS else "move",
             "climax": bool(c.get("climax", False)), "chars": [canon(str(x), nm) for x in (c.get("chars") or [])],
             "props": [str(x).strip() for x in (c.get("props") or []) if str(x).strip()],
+            "looks": {canon(str(k), nm): str(v).strip() for k, v in (c.get("looks") or {}).items()
+                      if str(v).strip() and str(v).strip() != "기본"} if isinstance(c.get("looks"), dict) else {},
             "loc": str(c.get("loc", "")), "action": str(c.get("action", "")).strip(),
             "action_en": str(c.get("action_en", "")).strip(),
             "frame_ko": str(c.get("frame_ko") or c.get("action") or "").strip(),
@@ -285,7 +339,7 @@ def normalize(cuts: list, ep: dict, bible: dict | None = None) -> list:
             "motion_en": str(c.get("motion_en") or c.get("action_en") or "").strip(), "dialogue": d,
             "screen_text": str(c.get("screen_text") or ""), "sfx": str(c.get("sfx") or ""),
         })
-    return fit_durations(cap_video(out))
+    return fit_durations(cap_video(unify_looks(out)))
 
 
 def cap_video(cuts: list, limit: int = MAX_VIDEO, moving: int = MAX_MOVING) -> list:
@@ -403,7 +457,8 @@ def shows_emblem(c: dict) -> bool:
     return bool(LOGO_WORDS.search(text) or re.search(r"엠블럼|emblem", text, re.I)) or c.get("size") in ("WS", "MLS")
 
 
-def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None, props: dict | None = None) -> str:
+def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None, props: dict | None = None,
+                 look_text: dict | None = None) -> str:
     """스틸(컷 그림) 지시문: 영어, 확정형. cast[name]=외모 영어 묘사, locs[id]=(이름, 영어 묘사).
     refs = 함께 넣는 기준 그림 순서 (인물 이름 또는 장소 id). 지시문에서 '기준 그림 몇 번'으로 짚어 준다."""
     refs = refs or []
@@ -412,7 +467,16 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None,
     for ch in c["chars"]:
         base, _, part = ch.partition(":")
         desc = cast.get(base, base)
-        tag = f"the person in reference image {pos[base]}, same face, hair and outfit" if base in pos else desc
+        lt = (look_text or {}).get(base)               # (룩 영어 설명, 룩 기준 그림이 있는가)
+        if base in pos and lt and not lt[1]:           # 룩 그림이 아직 없음: 얼굴만 기준 그림에서, 머리·분장·옷은 글로
+            tag = (f"the person in reference image {pos[base]}: the same face only; the hair, make-up and clothing of that "
+                   f"reference are replaced by this look: {lt[0].rstrip('. ')}")
+        elif base in pos and lt:
+            tag = f"the person in reference image {pos[base]}, same face, hair, make-up and outfit as that reference ({lt[0].rstrip('. ')})"
+        elif base in pos:
+            tag = f"the person in reference image {pos[base]}, same face, hair and outfit"
+        else:
+            tag = desc + (f", {lt[0].rstrip('. ')}" if lt else "")
         if f"{base}@정면" in pos:
             tag += f" (reference image {pos[base + '@정면']} shows the same person from the front)"
         who.append(f"{tag}, only the hands visible" if part == "손" else f"{tag}, seen from behind" if part == "뒷모습" else tag)

@@ -71,6 +71,10 @@ STYLES = {
 # 캐스팅 시트 (「3 Minutes」 4장 세트 방식): 정면 = 확정 그림, 나머지 3장은 정면을 기준 그림으로 생성.
 SAME = ("The same person as the reference image: identical face, hairstyle, bangs, hair color and clothing. "
         "Neutral relaxed expression. ")
+# 분장·의상(룩): 확정 얼굴은 그대로 두고 머리·분장·옷만 바꾼 정면 그림을 만든다.
+LOOK_SAME = ("The same person as the reference image: identical face, identical age, identical body. "
+             "The hair, make-up and clothing of the reference are replaced by the look described here. "
+             "Front view, vertical framing from the top of the head to the upper hips, neutral relaxed expression. Look: ")
 VIEWS = {
     "side": ("3/4", "3:4", SAME + "Three-quarter view: body and face turned 45 degrees to the camera's left, eyes looking past "
              "the camera. Vertical framing from the top of the head to the upper hips."),
