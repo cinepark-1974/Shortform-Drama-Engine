@@ -25,7 +25,9 @@ ITEMS = {
     "action": "첫 장면의 자세·시선·손에 든 것이 그림과 같고, 물건이 몸이나 기계에 파묻히는 등 물리적으로 말이 안 되는 곳이 없다",
     "props": "몸에 거는 소품이 없다 (사원증·출입증·방문증 목걸이, 명찰, 귀걸이·목걸이·반지·팔찌·시계, 머리핀, 이어폰, 글자·로고 있는 옷)",
     "identity": "기준 그림의 인물과 같은 사람이다 (얼굴, 머리 모양, 앞머리, 옷 색·종류)",
-    "text": "그림 안에 글자·숫자·로고가 생기지 않았다 (빈 화면·빈 종이는 합격)",
+    "text": "그림 안 어디에도 글자·숫자가 없다: 벽 로고 옆 회사 이름, 간판, 화면, 종이 포함 (빈 화면·빈 종이·글자 없는 도형 엠블럼은 합격)",
+    "set": "장소 기준 그림과 같은 공간이고, 벽 엠블럼·간판이 보이면 기준 그림과 같은 모양·같은 위치다 (새 로고를 지어내지 않았다)",
+    "prop": "손에 든 소품이 소품 기준 그림·소품 설명과 같은 종류·색·모양의 물건이다 (노트북 가방이 클러치나 토트백으로 바뀌지 않았다)",
     "anatomy": "손가락·팔·얼굴이 자연스럽고, 지시보다 많은 인물이 앞쪽에 나오지 않았다",
 }
 CLIP_ITEMS = {
@@ -45,6 +47,8 @@ GENERIC_FIX = {
     "identity": "The face, hairstyle, bangs and clothing match the reference image of the character exactly.",
     "text": "Every screen and paper in frame is blank with no letters.",
     "anatomy": "Natural hands with five fingers each; only the named characters appear in the foreground.",
+    "set": "The room and any wall emblem match the location reference exactly: same shape, same position, no new logo.",
+    "prop": "The hand prop is exactly the object described in the props line, same type, color and shape.",
     "people": "No new person enters the frame during the clip.",
     "lips": "Mouths stay closed for the whole clip.",
 }
@@ -57,6 +61,9 @@ STILL_SYSTEM = """당신은 한국 실사 드라마 숏폼의 스크립터(연�
 - identity 는 얼굴형·눈·머리 모양·앞머리·옷 종류와 색으로 봅니다. 조명·표정·각도 차이는 불합격 사유가 아닙니다.
 - 기준 그림에 장신구·목걸이가 있어도 컷 그림에는 없어야 합격입니다 (props).
 - 지시문에 손에 든 소품(방문증, 휴대폰, 서류)이 있으면 손에 든 것은 합격, 목에 걸었으면 불합격입니다.
+- '소품:' 이름표가 붙은 기준 그림은 그 소품의 생김새입니다. 컷 그림 속 소품이 다른 종류의 물건이면 prop 불합격입니다. 소품이 없는 컷은 prop 합격.
+- 글자는 엄격하게 봅니다. 벽 로고 옆에 회사 이름 같은 글자가 한 줄이라도 있으면 text 불합격이고,
+  fix_en 은 "The wall shows only the abstract emblem from the location reference, with no lettering anywhere." 처럼 씁니다.
 
 불합격 항목마다:
 - reason: 무엇이 틀렸는지 한국어 한 문장 (예: "목에 사원증 목걸이가 걸려 있다").
@@ -64,7 +71,7 @@ STILL_SYSTEM = """당신은 한국 실사 드라마 숏폼의 스크립터(연�
   'slightly', 'or', 'maybe' 금지.
 
 JSON 만 출력:
-{"items":{"subject":true,"action":true,"props":true,"identity":true,"text":true,"anatomy":true},
+{"items":{"subject":true,"action":true,"props":true,"identity":true,"text":true,"set":true,"prop":true,"anatomy":true},
  "fails":[{"item":"","reason":"","fix_en":""}]}"""
 
 CLIP_SYSTEM = """당신은 한국 실사 드라마 숏폼의 영상 검수자입니다. 이미지 생성 영상(첫 프레임 = 확정 스틸)의 한 테이크를 검수합니다.
@@ -130,6 +137,7 @@ def judge_still(api_key: str, still: bytes, refs: list[tuple[str, bytes]], cut: 
             f"첫 장면(이 그림이 보여 줘야 할 정지 상태): {cut.get('frame_ko') or cut.get('action')}\n"
             f"영어: {cut.get('frame_en') or cut.get('action_en')}\n"
             f"화면에 보이는 인물: {', '.join(cut.get('chars') or []) or '없음'}\n"
+            f"손에 든 소품: {', '.join(cut.get('props') or []) or '없음'}\n"
             + (f"화면 글자(편집에서 얹음, 그림엔 빈 화면): {cut['screen_text']}\n" if cut.get("screen_text") else "")
             + (f"대사: {d['who']} {d['text']}\n" if d else "")
             + "\n검수 항목:\n" + "\n".join(f"- {k}: {v}" for k, v in ITEMS.items())

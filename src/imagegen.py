@@ -57,6 +57,11 @@ STYLES = {
             "Shallow depth of field with a soft out-of-focus foreground object at the frame edge. "
             "Medium-format film look with Kodak Portra 160 color, visible organic film grain, soft highlight roll-off "
             "and a faint vignette. Imperfect natural framing with the subject off center." + NO_WEAR + NEG),
+    # 02 소품 기준 그림: 한 화 안에서도, 화가 바뀌어도 같은 물건이 나오게 하는 기준 (노트북 가방, 휴대폰 등)
+    "prop": ("A real product reference photograph of one single everyday object, the whole object visible and centered, "
+             "nobody in frame, no hands. ",
+             " Neutral bright grey seamless studio background, soft diffused studio light, 85mm lens, true material texture, "
+             "natural color. Plain design with no brand, no logo, no lettering." + NEG),
     # 02 캐스팅 시트: 확정 정면 그림을 기준 그림으로 넣어 3/4·전신·뒷모습을 만든다 (자세는 VIEWS 문장이 정함).
     "sheet": ("A Korean actor casting reference sheet photo, ultra-photorealistic studio photography. " + SKIN,
               " Real knit and fabric texture with soft folds, individual hair strands visible. "

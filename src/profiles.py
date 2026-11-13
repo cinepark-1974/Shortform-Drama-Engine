@@ -26,6 +26,8 @@ SYSTEM = """당신은 한국 실사 드라마의 캐스팅 디렉터이자 미�
   주연·주요 조연은 매력을 분명히 씀(beautiful / handsome, clear bright eyes 등). 'flawless', 'airbrushed', 'perfect skin', 'slightly', 'or' 금지.
   prompt_en 에 장신구·사원증·명찰·로고를 넣지 않음.
 - 장소 prompt_en: 사람 없는 넓은 마스터 샷, 눈높이, 낮의 창 자연광(밤 장소면 실제 조명), 서울의 실제 같은 공간.
+  회사 이름·로고 글자·간판 글자를 쓰지 않음 (그림 AI가 매번 다른 글자를 지어냄). 회사 로고가 필요한 벽에는
+  "a single abstract geometric metal emblem with no letters" 처럼 글자 없는 도형 엠블럼 하나만 씀. 회사 이름은 편집 자막으로 넣음.
 
 JSON 만 출력:
 {"characters":[{"name":"","role_ko":"","age":"","look_ko":"","outfit_ko":"","prompt_en":""}],

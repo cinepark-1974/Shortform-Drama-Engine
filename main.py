@@ -1,4 +1,4 @@
-"""BLUE JEANS · SHORTFORM DRAMA ENGINE  (숏폼드라마 엔진) v0.6
+"""BLUE JEANS · SHORTFORM DRAMA ENGINE  (숏폼드라마 엔진) v0.7
 
 1인 운영 자동화 엔진. Shortform-Engine 대본 → 작품 정리 → 캐스팅 → 회당 컷 분할 → 스틸 → 영상 → 더빙 → 자막 → 편집 → 마스터.
 v0.2 범위: 01 대본(작품 정리·정리본 내보내기) · 02 캐스팅 · 03 회당 컷 분할. 04 이후는 자리만.
@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v0.6"
+VERSION = "v0.7"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -571,7 +571,7 @@ elif cur == "cast":
             return buf.getvalue()
         st.download_button(f"확정 그림 {len(picks)}장 내려받기 (드라이브용 이름 정리, zip)", _zip, file_name=f"casting_{work['id']}.zip",
                            mime="application/zip", help="CAST_FINAL·LOCATION_MASTER 폴더로 나뉘고, 이름이 '인물_ref_front', '장소번호_장소_master' 로 정리됩니다. 압축을 풀어 드라이브 작업 폴더에 그대로 올리면 됩니다.")
-    t_char, t_loc = st.tabs(["인물", "장소 (마스터)"])
+    t_char, t_loc, t_prop = st.tabs(["인물", "장소 (마스터)", "소품"])
     stt = bb.stats(B, parsed)
 
     def gen_many(prompts, aspect, style="ref"):
@@ -612,7 +612,7 @@ elif cur == "cast":
             upf = st.file_uploader("직접 올리기", type=["png", "jpg", "jpeg", "webp"], key=f"u_{kind}_{key}", label_visibility="collapsed")
         if go:
             with st.status(f"{label} 후보 {n_cand}장 생성 중… (장당 30초~1분)") as s:
-                for r in gen_many([prompt] * n_cand, aspect, "ref" if kind == "cast" else "location"):
+                for r in gen_many([prompt] * n_cand, aspect, {"cast": "ref", "prop": "prop"}.get(kind, "location")):
                     if isinstance(r, Exception):
                         st.error(str(r))
                         continue
@@ -806,6 +806,35 @@ elif cur == "cast":
                 st.markdown(f"<div class='small'>{l.get('desc','')}</div>", unsafe_allow_html=True)
                 asset_board("loc", l["id"], l["name"], info, "16:9", 2)
 
+    with t_prop:
+        props = work.setdefault("props", {})
+        st.markdown("<div class='small'>손에 드는 소품(가방, 휴대폰, 서류, 방문증)을 한 번 정해 두면 모든 컷에 같은 설명과 같은 기준 그림이 들어갑니다. "
+                    "콘티를 만들 때 새 소품은 자동으로 등록됩니다. 이미 만든 콘티에는 첫 장면 문장에 소품 이름(예: 노트북 가방)이 나오는 컷에 자동으로 붙습니다.</div>",
+                    unsafe_allow_html=True)
+        a1, a2, a3 = st.columns([2, 3, 1])
+        with a1:
+            pn = st.text_input("소품 이름", placeholder="세영의 노트북 가방", key="prop_new_name")
+        with a2:
+            pm = st.text_input("메모 (한국어, 비워도 됨)", placeholder="검은 나일론, 손잡이 두 개, 한 손에 든다", key="prop_new_note")
+        with a3:
+            st.write("")
+            if st.button("소품 추가", disabled=not (pn.strip() and KEYS.get("ANTHROPIC_API_KEY"))) and pn.strip() not in props:
+                with st.spinner("소품 설명을 쓰는 중…"):
+                    d = cutter.prop_desc(KEYS["ANTHROPIC_API_KEY"], pn.strip(), pm.strip(), MODEL)
+                props[pn.strip()] = {"prompt_en": d, "note": pm.strip()}
+                save(work)
+                st.rerun()
+        if not props:
+            st.info("등록된 소품이 없습니다. 위에서 추가하거나 03 콘티를 만들면 자동으로 등록됩니다.")
+        for name in list(props):
+            info = props[name]
+            with st.expander(f"{name} · {'기준 그림 확정' if info.get('pick') else '기준 그림 없음 (설명만 들어감)'}", expanded=not info.get("pick")):
+                asset_board("prop", name, name, info, "3:4", 2)
+                if st.button("이 소품 삭제", key=f"pdel_{name}"):
+                    props.pop(name)
+                    save(work)
+                    st.rerun()
+
 # ===== 03 컷 =====
 elif cur == "cut":
     allcuts = work.setdefault("cuts", {})
@@ -817,6 +846,13 @@ elif cur == "cut":
     known_l = {l["id"] for l in B["locations"]}
     castdesc = {c: (work.get("cast", {}).get(c, {}).get("prompt_en", "") or c).split(".")[0] for c in known_c}
     locdesc = {l["id"]: (l["name"], work.get("loc", {}).get(l["id"], {}).get("prompt_en", "") or l.get("desc", "")) for l in B["locations"]}
+    propdesc = {n: v.get("prompt_en", "") for n, v in work.get("props", {}).items()}
+
+    def add_props(r: dict):
+        """콘티가 새로 등록한 소품을 작품 소품 목록에 넣는다 (이미 있는 소품의 설명은 그대로)."""
+        for n, d in (r.get("props") or {}).items():
+            work.setdefault("props", {}).setdefault(n, {"prompt_en": d})
+            propdesc.setdefault(n, d)
 
     def store_cuts(ep_no: int, cuts: list, src: str, changes: list | None = None):
         """콘티 저장. 콘티가 바뀌면 컷 번호의 내용이 달라지므로 그 화의 스틸·영상은 보관함(stills_old·clips_old)으로 옮기고 처음부터."""
@@ -844,7 +880,8 @@ elif cur == "cut":
         if st.button("이 화 콘티 만들기" if str(ep_no) not in allcuts else "이 화 콘티 다시 만들기", type="primary", disabled=not KEYS.get("ANTHROPIC_API_KEY"),
                      help="다시 만들면 이 화의 기존 스틸·영상은 보관함으로 옮기고 새 콘티로 처음부터 만듭니다."):
             with st.spinner(f"EP {ep_no} 콘티 만드는 중… 컷 나누기 → 감수 (1~2분)"):
-                r = cutter.split(KEYS["ANTHROPIC_API_KEY"], ep, B, MODEL)
+                r = cutter.split(KEYS["ANTHROPIC_API_KEY"], ep, B, MODEL, props=propdesc)
+            add_props(r)
             store_cuts(ep_no, r["cuts"], r["model"], r.get("changes"))
             save(work)
             st.rerun()
@@ -855,7 +892,8 @@ elif cur == "cut":
         if todo and st.button(f"다음 화 콘티 (EP {todo[0]})", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
             n = todo[0]
             with st.spinner(f"EP {n} 콘티 만드는 중… 컷 나누기 → 감수 (1~2분)"):
-                r = cutter.split(KEYS["ANTHROPIC_API_KEY"], parsed["episodes"][n - 1], B, MODEL)
+                r = cutter.split(KEYS["ANTHROPIC_API_KEY"], parsed["episodes"][n - 1], B, MODEL, props=propdesc)
+            add_props(r)
             store_cuts(n, r["cuts"], r["model"], r.get("changes"))
             save(work)
             st.session_state["cut_ep_next"] = n      # 다음 실행에서 이 화를 화면에 띄움
@@ -905,7 +943,7 @@ elif cur == "cut":
                         f"{' · 효과음 ' + c['sfx'] if c['sfx'] else ''}</div></div>", unsafe_allow_html=True)
             with st.expander(f"{c['id']} 지시문 보기"):
                 st.markdown("**스틸 지시문** (gpt-image-2, 기준 그림 함께)")
-                st.code(cutter.still_prompt(c, castdesc, locdesc), language=None)
+                st.code(cutter.still_prompt(c, castdesc, locdesc, None, propdesc), language=None)
                 st.markdown("**영상 지시문**")
                 st.code(cutter.video_prompt(c, castdesc), language=None)
         with st.expander("컷 데이터 직접 고치기 (JSON)"):
@@ -932,6 +970,7 @@ elif cur == "still":
     known_c = {c["name"] for c in B["characters"]}
     castdesc = {c: (work.get("cast", {}).get(c, {}).get("prompt_en", "") or c).split(".")[0] for c in known_c}
     locdesc = {l["id"]: (l["name"], work.get("loc", {}).get(l["id"], {}).get("prompt_en", "") or l.get("desc", "")) for l in B["locations"]}
+    propdesc = {n: v.get("prompt_en", "") for n, v in work.get("props", {}).items()}
 
     def refs_for(c):
         """컷에 넣을 기준 그림: 화면에 나오는 인물(확정 그림) → 장소 마스터. 이름 순서가 지시문의 '기준 그림 n번'."""
@@ -948,10 +987,14 @@ elif cur == "still":
         k = work.get("loc", {}).get(c["loc"], {}).get("pick")
         if k:
             out.append((c["loc"], k))
+        for n in c.get("props", []):                  # 소품 기준 그림
+            pk = work.get("props", {}).get(n, {}).get("pick")
+            if pk:
+                out.append(("소품:" + n, pk))
         return out
 
     def still_state(n):
-        cuts = allcuts[str(n)]["cuts"]
+        cuts = cutter.fill_props(allcuts[str(n)]["cuts"], propdesc)
         rec = stills.setdefault(str(n), {})
         picked = sum(1 for c in cuts if rec.get(c["id"], {}).get("pick"))
         return cuts, rec, picked
@@ -1050,7 +1093,7 @@ elif cur == "still":
         label = f"EP {ep_no} 스틸 만들기 ({len(missing)}컷)" if missing else f"EP {ep_no} 스틸 완료 · {picked}/{len(cuts)}컷 확정"
         if st.button(label, type="primary", disabled=not (KEYS.get("OPENAI_API_KEY") and missing)):
             with st.status(f"EP {ep_no} 스틸 {len(missing) * n_c}장 생성{' · 자동 검수' if AUTO_QC else ''} 중… (4컷씩 동시, 2~6분)") as s:
-                make([(c, cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)]), refs_for(c)) for c in missing])
+                make([(c, cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc), refs_for(c)) for c in missing])
                 finish()
                 s.update(label="생성 완료", state="complete")
             st.rerun()
@@ -1069,7 +1112,7 @@ elif cur == "still":
                     try:
                         return qc.judge_still(KEYS["ANTHROPIC_API_KEY"], img_bytes(cell["pick"]),
                                               [(n, img_bytes(k)) for n, k in refs_for(c)], c,
-                                              cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)]), MODEL)
+                                              cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc), MODEL)
                     except Exception as ex:
                         return {"pass": True, "items": {}, "fails": [], "note": f"검수 오류: {str(ex)[:120]}"}
                 with ThreadPoolExecutor(4) as ex:
@@ -1086,7 +1129,7 @@ elif cur == "still":
         if st.button(f"불합격 컷 고치기 ({len(bad_cuts)}컷)", disabled=not (KEYS.get("OPENAI_API_KEY") and bad_cuts),
                      type="primary" if bad_cuts else "secondary"):
             with st.status(f"불합격 {len(bad_cuts)}컷을 고쳐 다시 만드는 중… (컷당 최대 {1 + QC_RETRY}회)") as s:
-                make([(c, qc.fix_prompt(rec[c["id"]].get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)]),
+                make([(c, qc.fix_prompt(rec[c["id"]].get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc),
                                         rec[c["id"]]["qc"]), refs_for(c)) for c in bad_cuts])
                 finish()
                 s.update(label="다시 만들기 완료", state="complete")
@@ -1097,6 +1140,14 @@ elif cur == "still":
             st.markdown(f"<div class='small' style='margin-top:8px'>검수 합격 <b>{ok_n}</b> · 불합격 <b style='color:var(--fix)'>{len(bad_cuts)}</b>"
                         f" · 검수 전 <b>{len(unchecked)}</b></div>", unsafe_allow_html=True)
 
+    old_p = [c for c in cuts if rec.get(c["id"], {}).get("prompt")]
+    if old_p and st.button(f"이 화 지시문 전체 새로 쓰기 ({len(old_p)}컷 · 비용 없음)",
+                           help="엔진 규칙·소품·기준 그림이 바뀐 뒤에 누릅니다. 그림은 그대로 두고 지시문만 지금 규칙으로 다시 조립합니다. 그다음 다시 만들 컷만 '이 컷 다시'를 누르세요."):
+        for c in old_p:
+            rec[c["id"]].pop("prompt", None)
+            st.session_state.pop(f"sp_{c['id']}", None)
+        save(work)
+        st.rerun()
     st.markdown(f"**EP {ep_no}** · {parsed['episodes'][ep_no - 1]['emotion']} · <span class='hook'>{parsed['episodes'][ep_no - 1]['hook']}</span>", unsafe_allow_html=True)
     cols = st.columns(4)
     for i, c in enumerate(cuts):
@@ -1140,7 +1191,13 @@ elif cur == "still":
                             finish()
                             st.rerun()
             with st.expander("지시문 · 다시 만들기"):
-                base_p = cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs])
+                base_p = cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs], propdesc)
+                if cell.get("prompt") and st.button("지시문 새로 쓰기 (지금 규칙·소품·기준 그림으로)", key=f"snew_{c['id']}",
+                                                    help="예전 규칙으로 만든 지시문을 버리고 새로 조립합니다. 그다음 '이 컷 다시'를 누르세요."):
+                    cell.pop("prompt", None)
+                    st.session_state.pop(f"sp_{c['id']}", None)
+                    save(work)
+                    st.rerun()
                 p2 = st.text_area("지시문", base_p, key=f"sp_{c['id']}", height=160, label_visibility="collapsed")
                 bad = imagegen.banned_in(p2)
                 if bad:
