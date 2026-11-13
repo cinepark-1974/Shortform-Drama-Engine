@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v0.7"
+VERSION = "v0.7.1"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -127,9 +127,44 @@ def now() -> str:
     return dt.datetime.now(KST).strftime("%Y-%m-%d %H:%M")
 
 
+EMBLEMS = Path(__file__).parent / "assets" / "emblems"
+
+
+def emblem_list(work: dict) -> dict:
+    """벽 엠블럼(회사 CI) 목록 {키: 이름}. 저장소 assets/emblems 의 파일 + 이 작품에 올린 것."""
+    out = {}
+    try:
+        meta = json.loads((EMBLEMS / "emblems.json").read_text("utf-8"))
+    except Exception:
+        meta = {}
+    for f, m in meta.items():
+        if (EMBLEMS / f).exists():
+            out["repo:" + f] = m.get("label", f)
+    for name, k in (work.get("emblems") or {}).items():
+        out[k] = name
+    return out
+
+
+def emblem_of(work: dict, loc_id: str, loc_name: str = "") -> str:
+    """장소에 걸린 엠블럼 키. 고른 적이 없으면 장소 이름으로 자동 연결(예: '대성' → 대성그룹 CI). 없으면 ''."""
+    info = work.get("loc", {}).get(loc_id, {})
+    if "emblem" in info:
+        return info["emblem"] or ""
+    try:
+        meta = json.loads((EMBLEMS / "emblems.json").read_text("utf-8"))
+    except Exception:
+        return ""
+    for f, m in meta.items():
+        if any(w in loc_name for w in m.get("match", [])) and (EMBLEMS / f).exists():
+            return "repo:" + f
+    return ""
+
+
 @st.cache_data(show_spinner=False, ttl=600)
 @st.cache_data(max_entries=400, show_spinner=False)
 def img_bytes(key: str):
+    if key.startswith("repo:"):
+        return (EMBLEMS / key[5:]).read_bytes()
     return store.get_bytes(key)      # 그림 파일 이름은 매번 새로 만들어지므로 저장해 두고 다시 써도 안전
 
 
@@ -574,9 +609,11 @@ elif cur == "cast":
     t_char, t_loc, t_prop = st.tabs(["인물", "장소 (마스터)", "소품"])
     stt = bb.stats(B, parsed)
 
-    def gen_many(prompts, aspect, style="ref"):
+    def gen_many(prompts, aspect, style="ref", refs=None):
         def one(p):
             try:
+                if refs:
+                    return imagegen.edit(KEYS["OPENAI_API_KEY"], p, refs, aspect, quality, style=style, model=KEYS.get("IMAGE_MODEL", ""))
                 return imagegen.generate(KEYS["OPENAI_API_KEY"], p, aspect, quality, style=style)
             except Exception as ex:
                 return ex
@@ -612,7 +649,11 @@ elif cur == "cast":
             upf = st.file_uploader("직접 올리기", type=["png", "jpg", "jpeg", "webp"], key=f"u_{kind}_{key}", label_visibility="collapsed")
         if go:
             with st.status(f"{label} 후보 {n_cand}장 생성 중… (장당 30초~1분)") as s:
-                for r in gen_many([prompt] * n_cand, aspect, {"cast": "ref", "prop": "prop"}.get(kind, "location")):
+                g_prompt, g_refs = prompt, None
+                if kind == "loc" and info.get("_emblem"):          # 벽 엠블럼(회사 CI)을 기준 그림으로 넣어 마스터를 만든다
+                    g_prompt = cutter.no_logo_words(prompt) + " " + cutter.EMBLEM_MASTER
+                    g_refs = [("emblem.jpg", img_bytes(info["_emblem"]))]
+                for r in gen_many([g_prompt] * n_cand, aspect, {"cast": "ref", "prop": "prop"}.get(kind, "location"), g_refs):
                     if isinstance(r, Exception):
                         st.error(str(r))
                         continue
@@ -798,13 +839,53 @@ elif cur == "cast":
                 st.error("지시문을 받지 못했습니다. 한 번 더 누르거나 장소마다 '영어 지시문 쓰기'를 쓰세요.")
             save(work)
             st.rerun()
+        with st.expander(f"벽 엠블럼 (회사 CI) 보관함 · {len(emblem_list(work))}개"):
+            st.markdown("<div class='small'>글자 없는 도형 엠블럼 그림을 올려 두면 장소마다 골라 쓸 수 있습니다. 회사 이름 글자는 그림에 넣지 않고 편집 자막으로 넣습니다.</div>", unsafe_allow_html=True)
+            ecols = st.columns(6)
+            for i, (k, nm_) in enumerate(emblem_list(work).items()):
+                with ecols[i % 6]:
+                    st.image(img_bytes(k), caption=nm_, width="stretch")
+            en = st.text_input("엠블럼 이름", placeholder="서경F&B CI", key="em_new_name")
+            eu = st.file_uploader("엠블럼 그림 올리기", type=["png", "jpg", "jpeg", "webp"], key="em_new_file")
+            if eu is not None and en.strip() and not st.session_state.get(f"done_{eu.file_id}"):
+                from io import BytesIO
+                from PIL import Image
+                im = Image.open(BytesIO(eu.getvalue())).convert("RGBA")
+                bg = Image.new("RGB", im.size, "white")
+                bg.paste(im, mask=im.split()[3])
+                bg.thumbnail((1024, 1024))
+                buf = BytesIO()
+                bg.save(buf, "JPEG", quality=92)
+                k = f"works/{work['id']}/emblem/{slug(en.strip())}_{uuid.uuid4().hex[:6]}.jpg"
+                store.put_bytes(k, buf.getvalue(), "image/jpeg")
+                work.setdefault("emblems", {})[en.strip()] = k
+                st.session_state[f"done_{eu.file_id}"] = True
+                save(work)
+                st.rerun()
         st.caption("장소마다 넓은 마스터 1장을 확정합니다. 같은 장소의 모든 컷은 이 마스터에서 만듭니다.")
         for l in locs:
             info = work.setdefault("loc", {}).setdefault(l["id"], {})
             info.setdefault("desc_ko", l.get("desc", ""))     # 영어 지시문이 비었을 때 이 설명으로 바로 쓸 수 있게
             with st.expander(f"{'✓ ' if info.get('pick') else ''}{l['id']} {l['name']} · 장면 {stt['loc'].get(l['id'], 0)}개", expanded=not info.get("pick")):
                 st.markdown(f"<div class='small'>{l.get('desc','')}</div>", unsafe_allow_html=True)
+                ems = emblem_list(work)
+                cur = emblem_of(work, l["id"], l["name"])
+                opts = [""] + list(ems)
+                e1, e2 = st.columns([3, 1])
+                with e1:
+                    sel = st.selectbox("벽 엠블럼 (회사 CI)", opts, index=opts.index(cur) if cur in opts else 0, key=f"em_{l['id']}",
+                                       format_func=lambda k: ems.get(k, "없음"),
+                                       help="고르면 이 장소의 마스터를 만들 때와, 엠블럼이 보이는 컷을 만들 때 이 그림이 기준 그림으로 들어갑니다. 글자 없는 도형만 씁니다.")
+                with e2:
+                    if cur:
+                        st.image(img_bytes(cur), width=90)
+                if sel != cur:
+                    info["emblem"] = sel
+                    save(work)
+                    st.rerun()
+                info["_emblem"] = cur
                 asset_board("loc", l["id"], l["name"], info, "16:9", 2)
+                info.pop("_emblem", None)
 
     with t_prop:
         props = work.setdefault("props", {})
@@ -987,6 +1068,9 @@ elif cur == "still":
         k = work.get("loc", {}).get(c["loc"], {}).get("pick")
         if k:
             out.append((c["loc"], k))
+        em = emblem_of(work, c["loc"], locdesc.get(c["loc"], ("", ""))[0])
+        if em and cutter.shows_emblem(c):             # 벽 엠블럼이 보이는 컷
+            out.append(("엠블럼", em))
         for n in c.get("props", []):                  # 소품 기준 그림
             pk = work.get("props", {}).get(n, {}).get("pick")
             if pk:

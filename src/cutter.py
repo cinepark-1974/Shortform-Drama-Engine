@@ -387,6 +387,22 @@ def check(cuts: list, known_chars: set, known_locs: set, scenes: list | None = N
 LOGO_WORDS = re.compile(r"로고|CI\b|간판|logo|signage", re.I)
 
 
+EMBLEM_MASTER = ("The company emblem on the wall is exactly the emblem in the reference image: the same geometric shape made of "
+                 "brushed metal panels, mounted once on the wall, with no letters, no company name and no other logo anywhere.")
+
+
+def no_logo_words(text: str) -> str:
+    """지시문에서 회사 이름이 붙은 로고 표현을 'company emblem' 으로 바꾼다 ("Daesung Group CI logo" → "company emblem")."""
+    t = re.sub(r"\b(?:[A-Z][A-Za-z&]+ ){1,3}(?:CI |corporate |brand )?logo\b", "company emblem", text)
+    return re.sub(r"(?i)\b(CI |company |corporate |brand )?logo\b", "company emblem", t)
+
+
+def shows_emblem(c: dict) -> bool:
+    """이 컷에 벽 엠블럼이 보이는가: 첫 장면에 로고·엠블럼이 적혀 있거나, 공간이 넓게 보이는 컷."""
+    text = c.get("frame_ko", "") + " " + c.get("frame_en", "") + " " + c.get("action", "")
+    return bool(LOGO_WORDS.search(text) or re.search(r"엠블럼|emblem", text, re.I)) or c.get("size") in ("WS", "MLS")
+
+
 def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None, props: dict | None = None) -> str:
     """스틸(컷 그림) 지시문: 영어, 확정형. cast[name]=외모 영어 묘사, locs[id]=(이름, 영어 묘사).
     refs = 함께 넣는 기준 그림 순서 (인물 이름 또는 장소 id). 지시문에서 '기준 그림 몇 번'으로 짚어 준다."""
@@ -407,6 +423,9 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None,
         place = (f"the same room as reference image {pos[c['loc']]}: same architecture, materials, furniture and light. "
                  "The camera shows only the part of the room this shot needs. Every wall emblem and every sign keeps exactly the shape, "
                  "color and position it has in that reference, with no letters added and no new logo invented")
+        if "엠블럼" in pos:
+            place += (f". The wall emblem is exactly the emblem in reference image {pos['엠블럼']}: the same geometric shape of "
+                      "brushed metal panels, one emblem only, no letters beside it")
     else:
         place = (loc[1] or loc[0]).rstrip(". ") + ". Every sign and every emblem is a plain abstract shape with no letters"
     plist = []
