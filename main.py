@@ -16,10 +16,10 @@ from pathlib import Path
 import streamlit as st
 
 from src import videogen, bible as bb
-from src import cutter, imagegen, profiles, qc, script_parser
+from src import cutter, dubbing, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v0.9.2"
+VERSION = "v1.0"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -107,6 +107,7 @@ STAGES = [
     ("master", "09", "마스터", "확인 · 업로드"),
 ]
 HOW = {
+    "dub": "콘티의 대사를 인물별 고정 목소리로 만듭니다 (ElevenLabs). 만든 음성을 다시 글자로 받아 적어 대본과 비교하고, 다르게 읽힌 줄은 2회까지 다시 만듭니다. 음성이 컷보다 길면 편집에서 컷을 늘립니다.",
     "clip": "확정한 스틸을 첫 프레임으로 넣어 짧은 영상을 만듭니다 (Replicate · Kling). 테이크마다 첫·중간·마지막 장면을 Claude 가 검수하고, 불합격이면 고쳐서 2회까지 다시 만듭니다. 그래도 불합격이면 그 컷은 정지+카메라로 바꿉니다. 소리는 06·07 단계에서 얹습니다.",
     "still": "컷마다 장면 그림을 만듭니다. 인물 확정 그림과 장소 마스터를 기준 그림으로 넣고, 만든 직후 Claude 가 자동 검수합니다(지시문 대상·동작·몸에 거는 소품·같은 얼굴·글자·손). 불합격이면 이유를 지시문에 붙여 2회까지 다시 만들고, 그래도 불합격인 컷만 빨간 표시가 남습니다.",
     "script": "대본을 읽고 작품 정리를 합니다. 엔진은 인물 표기와 장소 세트만 통일하고, 설정 충돌은 '수정 제안'으로 남깁니다. 원고 수정은 감독님이 직접 하고, 고친 원고를 다시 올리면 됩니다.",
@@ -434,7 +435,7 @@ def heatmap(work: dict, levels: list[int], big: bool = False) -> str:
     for i, lv in enumerate(levels, start=1):
         bg, fg = shade(lv)
         e_s = eps.get(str(i), {})
-        bad = e_s.get("cut_fix", 0) > 0 or e_s.get("still_qc", 0) > 0 or e_s.get("clip_qc", 0) > 0
+        bad = e_s.get("cut_fix", 0) > 0 or e_s.get("still_qc", 0) > 0 or e_s.get("clip_qc", 0) > 0 or e_s.get("dub_qc", 0) > 0
         cls = ("g " if (i - 1) % BINGE == 0 else "") + ("fx" if bad else "")
         pad = "padding:7px 0;font-size:11px;" if big else ""
         cells += (f'<div class="{cls}" style="{pad}background:{bg};color:{fg}" '
@@ -1852,10 +1853,213 @@ elif cur == "clip":
         st.session_state["clip_ep_next"] = nxt[0]
         st.rerun()
 
-# ===== 06 이후 =====
+# ===== 06 더빙 =====
+elif cur == "dub":
+    allcuts = work.get("cuts", {})
+    dubs = work.setdefault("dubs", {})
+    vmap = work.setdefault("voices", {})
+    eps_state = work.setdefault("eps", {})
+    EKEY = KEYS.get("ELEVENLABS_API_KEY", "")
+    n_ep = len(parsed["episodes"])
+    brief("dub", f"더빙 완료 {sum(1 for v in eps_state.values() if v.get('dub') == 'done')} / {n_ep}화")
+    ready = [e["ep"] for e in parsed["episodes"] if str(e["ep"]) in allcuts]
+    if not EKEY:
+        st.info("Streamlit Secrets 에 ELEVENLABS_API_KEY 를 넣으면 더빙을 만들 수 있습니다.")
+    if not ready:
+        st.info("03 콘티를 만든 화가 있어야 합니다.")
+        st.stop()
+
+    @st.cache_data(show_spinner=False, ttl=900)
+    def voice_list(_key: str, tag: str):
+        return dubbing.voices(_key)
+
+    d1, d2, d3 = st.columns([1, 1, 2])
+    with d1:
+        todo_d = [n for n in ready if eps_state.get(str(n), {}).get("dub") != "done"]
+        if "dub_ep_next" in st.session_state:
+            st.session_state["dub_ep"] = st.session_state.pop("dub_ep_next")
+        ep_no = st.selectbox("화", ready, index=ready.index(todo_d[0]) if todo_d else 0, key="dub_ep",
+                             format_func=lambda n: f"EP {n}" + (" ✓" if eps_state.get(str(n), {}).get("dub") == "done" else ""))
+    with d2:
+        speed = st.slider("말 빠르기", 0.8, 1.2, float(work.get("dub_speed", 1.0)), 0.05,
+                          help="1.0 이 기본입니다. 숏폼은 1.0~1.1 이 자연스럽습니다. 바꾸면 그다음에 만드는 대사부터 적용됩니다.")
+        if speed != work.get("dub_speed", 1.0):
+            work["dub_speed"] = speed
+            save(work)
+    cuts = allcuts[str(ep_no)]["cuts"]
+    rec = dubs.setdefault(str(ep_no), {})
+    lines = [(i, c) for i, c in enumerate(cuts) if c.get("dialogue") and c["dialogue"].get("text", "").strip()]
+    whos = []
+    for _, c in lines:
+        if c["dialogue"]["who"] not in whos:
+            whos.append(c["dialogue"]["who"])
+    speakers = whos + [n for n in chars_ranked(work)[: work.get("main_n", 6)] if n not in whos]
+
+    def stale_d(c) -> bool:
+        """대사나 배정한 목소리가 바뀐 줄: 다시 만들어야 한다."""
+        cell = rec.get(c["id"], {})
+        v = vmap.get(c["dialogue"]["who"], {}).get("id")
+        return bool(cell.get("key")) and (cell.get("text") != c["dialogue"]["text"] or cell.get("voice") != v)
+
+    def dub_bad(cell) -> bool:
+        return bool(cell.get("key")) and not cell.get("pass", True) and not cell.get("ok")
+
+    def finish_d():
+        ok = all(rec.get(c["id"], {}).get("key") and not stale_d(c) for _, c in lines)
+        e_s = eps_state.setdefault(str(ep_no), {})
+        e_s["dub"] = "done" if ok else "doing"
+        e_s["dub_qc"] = sum(1 for _, c in lines if dub_bad(rec.get(c["id"], {})))
+        save(work)
+
+    # ── 목소리 배정 (작품당 한 번) ──
+    no_voice = [w for w in whos if not vmap.get(w, {}).get("id")]
+    with st.expander(f"목소리 배정 · {sum(1 for w in speakers if vmap.get(w, {}).get('id'))} / {len(speakers)}명"
+                     + (f" · 이 화에 필요한 {len(no_voice)}명 미배정" if no_voice else ""), expanded=bool(no_voice)):
+        st.markdown("<div class='small'>인물마다 목소리 하나를 고르면 100화 내내 그 목소리로 만듭니다. 목록은 ElevenLabs 계정에서 쓸 수 있는 목소리입니다. "
+                    "한국어 목소리가 적으면 ElevenLabs 의 Voice Library 에서 한국어 목소리를 'Add' 한 뒤 '목록 새로 받기'를 누르세요.</div>", unsafe_allow_html=True)
+        vs = []
+        if EKEY:
+            try:
+                vs = voice_list(EKEY, st.session_state.get("voice_tag", "0"))
+            except Exception as ex:
+                st.error(f"목소리 목록을 받지 못했습니다: {ex}")
+        f1, f2, f3, f4 = st.columns([1, 1, 2, 1])
+        with f1:
+            fg = st.selectbox("성별", ["전체", "여", "남"], key="vf_gender")
+        with f2:
+            fk = st.checkbox("한국어 목소리만", value=False, key="vf_ko")
+        with f3:
+            fq = st.text_input("이름·설명으로 찾기", key="vf_q")
+        with f4:
+            st.write("")
+            if st.button("목록 새로 받기", key="vf_reload"):
+                st.session_state["voice_tag"] = uuid.uuid4().hex[:6]
+                st.rerun()
+        gmap = {"여": "female", "남": "male"}
+        shown = [v for v in vs if (fg == "전체" or v["gender"] == gmap[fg]) and (not fk or v["ko"])
+                 and (not fq.strip() or fq.strip().lower() in (v["name"] + " " + v["desc"]).lower())]
+        st.caption(f"목소리 {len(shown)}개 (전체 {len(vs)}개)")
+        byid = {v["id"]: v for v in vs}
+        for w in speakers:
+            cur_id = vmap.get(w, {}).get("id", "")
+            opts = [""] + [v["id"] for v in shown] + ([cur_id] if cur_id and cur_id not in [v["id"] for v in shown] else [])
+            a1, a2, a3 = st.columns([2, 2, 1])
+            with a1:
+                sel = st.selectbox(w + (" · 이 화에 나옴" if w in whos else ""), opts, index=opts.index(cur_id) if cur_id in opts else 0, key=f"vsel_{w}",
+                                   format_func=lambda i: dubbing.voice_label(byid[i]) if i in byid else (vmap.get(w, {}).get("name", "") if i else "고르지 않음"))
+            with a2:
+                pv = byid.get(sel, {}).get("preview")
+                if pv:
+                    st.audio(pv)
+                samp = st.session_state.get(f"vsamp_{w}_{sel}")
+                if samp:
+                    st.audio(samp, format="audio/mpeg")
+            with a3:
+                st.write("")
+                first = next((c["dialogue"]["text"] for _, c in lines if c["dialogue"]["who"] == w), "")
+                if sel and first and st.button("대사로 들어 보기", key=f"vtry_{w}", disabled=not EKEY, help=f"이 화의 첫 대사를 이 목소리로 만들어 들려줍니다: {first[:30]}"):
+                    try:
+                        st.session_state[f"vsamp_{w}_{sel}"] = dubbing.speak(EKEY, sel, first, model=KEYS.get("ELEVEN_MODEL", ""), speed=speed)
+                    except Exception as ex:
+                        st.error(str(ex))
+                    st.rerun()
+            if sel != cur_id:
+                if sel:
+                    vmap[w] = {"id": sel, "name": byid.get(sel, {}).get("name", "")}
+                else:
+                    vmap.pop(w, None)
+                finish_d()
+                st.rerun()
+
+    missing_d = [(i, c) for i, c in lines if (not rec.get(c["id"], {}).get("key") or stale_d(c)) and vmap.get(c["dialogue"]["who"], {}).get("id")]
+
+    def make_dub(targets):
+        """targets = [(i, 컷)] → 3줄씩 동시에 만들고 받아 적기로 검수. 한 줄이 끝날 때마다 저장."""
+        from concurrent.futures import as_completed
+
+        def one(i, c):
+            prev, nxt = dubbing.context(cuts, i)
+            return dubbing.make_line(EKEY, vmap[c["dialogue"]["who"]]["id"], c["dialogue"]["text"], prev, nxt,
+                                     KEYS.get("ELEVEN_MODEL", ""), speed, check=True)
+        with ThreadPoolExecutor(3) as ex:
+            futs = {ex.submit(one, i, c): c for i, c in targets}
+            for f in as_completed(futs):
+                c = futs[f]
+                try:
+                    r = f.result()
+                except Exception as e:
+                    st.error(f"{c['id']}: {e}")
+                    continue
+                k = f"works/{work['id']}/dub/ep{ep_no:03d}/{c['id']}_{uuid.uuid4().hex[:6]}.mp3"
+                store.put_bytes(k, r["mp3"], "audio/mpeg")
+                old = rec.get(c["id"], {})
+                rec[c["id"]] = {"key": k, "takes": (old.get("takes") or []) + [k], "sec": r["sec"], "heard": r["heard"], "score": r["score"],
+                                "pass": r["pass"], "note": r["note"], "tries": r["tries"], "text": c["dialogue"]["text"],
+                                "voice": vmap[c["dialogue"]["who"]]["id"], "who": c["dialogue"]["who"]}
+                finish_d()
+
+    with d3:
+        st.write("")
+        lab = f"EP {ep_no} 더빙 만들기 ({len(missing_d)}줄)" if missing_d else (f"EP {ep_no} 더빙 완료 · {len(lines)}줄" if lines else f"EP {ep_no} 대사 없음")
+        if st.button(lab, type="primary", disabled=not (EKEY and missing_d)):
+            with st.status(f"EP {ep_no} 대사 {len(missing_d)}줄 생성 · 받아 적기 검수 중… (3줄씩 동시)") as s_:
+                make_dub(missing_d)
+                finish_d()
+                s_.update(label="더빙 완료", state="complete")
+            st.rerun()
+    if not lines and eps_state.get(str(ep_no), {}).get("dub") != "done":
+        finish_d()
+    if no_voice:
+        st.markdown(f"<span class='tag fix'>목소리 미배정</span> <span class='small'>{' · '.join(no_voice)} — 위 '목소리 배정'에서 고르면 그 인물의 대사를 만듭니다.</span>", unsafe_allow_html=True)
+    total = sum(max(c["dur"], rec.get(c["id"], {}).get("sec", 0) + 0.2 if c.get("dialogue") else 0) for c in cuts)
+    st.caption(f"버튼 한 번에 한 화만 만듭니다. 만든 음성을 다시 글자로 받아 적어 대본과 비교하고, 다르게 읽힌 줄은 2회까지 다시 만듭니다. "
+               f"빨간 표시가 남은 줄만 들어 보면 됩니다. · 더빙을 반영한 이 화 길이 약 {total:.0f}초")
+
+    for i, c in lines:
+        cell = rec.get(c["id"], {})
+        d = c["dialogue"]
+        vname = vmap.get(d["who"], {}).get("name", "미배정")
+        if not cell.get("key"):
+            tag = "<span class='tag todo'>대기</span>"
+        elif stale_d(c):
+            tag = "<span class='tag fix'>대사·목소리가 바뀜</span>"
+        elif cell.get("ok"):
+            tag = "<span class='tag ok'>통과 처리</span>"
+        elif cell.get("pass", True):
+            tag = "<span class='tag ok'>검수 합격</span>" + (f" <span class='small'>{cell['note']}</span>" if cell.get("note") else "")
+        else:
+            tag = f"<span class='tag fix'>다르게 읽힘</span> <span class='small' style='color:var(--fix)'>들린 말: {cell.get('heard', '')}</span>"
+        over = cell.get("sec", 0) + 0.2 - c["dur"]
+        longer = f" <span class='tag todo'>컷보다 {over:.1f}초 김 · 편집에서 컷을 늘림</span>" if cell.get("key") and over > 0.05 else ""
+        l1, l2, l3 = st.columns([3, 2, 1])
+        with l1:
+            st.markdown(f"<div class='cut'><div class='h'>{c['id']} · {d['who']} <span class='d'>{vname}</span>"
+                        f"<span class='d'>{cell.get('sec', 0):.1f}s / 컷 {c['dur']}s</span></div>"
+                        f"<div class='a'>{d['text']}</div>{tag}{longer}</div>", unsafe_allow_html=True)
+        with l2:
+            if cell.get("key"):
+                a = img_bytes(cell["key"])
+                if a:
+                    st.audio(a, format="audio/mpeg")
+        with l3:
+            if vmap.get(d["who"], {}).get("id") and st.button("이 줄 다시", key=f"dre_{c['id']}", disabled=not EKEY):
+                with st.spinner(f"{c['id']} 다시 만드는 중…"):
+                    make_dub([(i, c)])
+                    finish_d()
+                st.rerun()
+            if dub_bad(cell) and st.button("이대로 통과", key=f"dok_{c['id']}", help="받아 적기가 틀렸을 때 사람이 통과시킵니다."):
+                cell["ok"] = True
+                finish_d()
+                st.rerun()
+    nxt_d = [n for n in ready if n != ep_no and eps_state.get(str(n), {}).get("dub") != "done"]
+    if eps_state.get(str(ep_no), {}).get("dub") == "done" and nxt_d and st.button(f"다음 화로 (EP {nxt_d[0]})"):
+        st.session_state["dub_ep_next"] = nxt_d[0]
+        st.rerun()
+
+# ===== 07 이후 =====
 else:
     brief(cur, "다음 버전")
-    st.info("지금 버전은 대본 · 작품 정리 · 캐스팅 · 컷 분할 · 스틸 · 영상까지입니다. 다음: 06 더빙 → 07 자막·사운드 → 08 편집 → 09 마스터.")
+    st.info("지금 버전은 대본 · 캐스팅 · 콘티 · 콘티 그림 · 영상 · 더빙까지입니다. 다음: 07 자막·사운드 → 08 편집 → 09 마스터.")
 
 # ───────── 화면 맨 아래: 다음 할 일 안내 ─────────
 st.divider()
