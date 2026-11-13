@@ -202,7 +202,7 @@ def judge_clip(api_key: str, video: bytes, still: bytes, cut: dict, prompt: str,
     head = (f"[컷 {cut.get('id')}] 움직임 종류: {cut.get('motion')}\n"
             f"첫 장면: {cut.get('frame_ko') or cut.get('action')}\n"
             f"일어나야 할 움직임: {cut.get('motion_ko') or cut.get('motion_en') or cut.get('action')}\n"
-            f"대사: {'있음 (목소리는 편집에서, 입은 다문 채)' if cut.get('dialogue') else '없음'}\n"
+            f"대사: {'있음 — 말하는 얼굴이 보이는 컷: 말하는 인물의 입이 움직이는 것이 정상(lips 합격)' if cut.get('talk') else '있음 (목소리는 편집에서, 입은 다문 채)' if cut.get('dialogue') else '없음'}\n"
             "\n검수 항목:\n" + "\n".join(f"- {k}: {v}" for k, v in CLIP_ITEMS.items())
             + f"\n\n영상 지시문(참고):\n{prompt[:2000]}")
     content = [{"type": "text", "text": head}, {"type": "text", "text": "확정 스틸:"}, _img(still)]

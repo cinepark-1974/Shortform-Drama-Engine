@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.1.2"
+VERSION = "v1.2"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -560,6 +560,7 @@ with st.sidebar:
     MODEL = KEYS.get("CLAUDE_MODEL", "")
 
 work = store.load_work(st.session_state["wid"]) if st.session_state.get("wid") else None
+cutter.ALL_MOVE = bool(work.get("all_move", True)) if work else True   # 모든 컷 영상(기본) / 절약
 
 # ───────── 새 작품 ─────────
 if not work:
@@ -1680,6 +1681,18 @@ elif cur == "clip":
         mode = st.selectbox("화질", ["pro", "standard"], format_func=lambda m: {"standard": "720p (시험용)", "pro": "1080p (기본 · 4K 업스케일 대비)"}[m],
                             help="720p로 시험한 테이크를 1080p로 다시 만들면 다른 움직임이 나옵니다. 본편은 처음부터 1080p로 만듭니다.")
     cuts = cutter.fix_screens(allcuts[str(ep_no)]["cuts"])   # 화면 글자 컷은 정지 컷 (영상을 만들지 않음)
+    all_on = st.checkbox("모든 컷을 영상으로 만들기 (끄면 일부 컷만 영상 · 나머지는 정지 그림에 카메라 움직임)", value=cutter.ALL_MOVE, key="all_move_box")
+    if all_on != cutter.ALL_MOVE:
+        work["all_move"] = cutter.ALL_MOVE = all_on
+        save(work)
+    if cutter.apply_move(cuts, cutter.ALL_MOVE):       # 이미 만든 콘티에도 적용 (원래 배정은 motion0 에 보관)
+        if work["eps"].get(str(ep_no), {}).get("clip") == "done":
+            work["eps"][str(ep_no)]["clip"] = "doing"
+        save(work)
+    drec0 = work.get("dubs", {}).get(str(ep_no), {})
+    for c in cuts:
+        c["talk"] = cutter.is_talk(c)
+        c["clip_sec"] = cutter.talk_seconds(c, drec0.get(c["id"], {}).get("sec"))
     rec = clips.setdefault(str(ep_no), {})
     srec = stills.get(str(ep_no), {})
     moving = [c for c in cuts if c["motion"] in ("move", "video")]
@@ -1770,7 +1783,7 @@ elif cur == "clip":
                 st.error(f"{c['id']}: 확정 스틸이 없습니다")
                 continue
             try:
-                p = videogen.start(TOKEN, prompt, data, videogen.clip_seconds(c["dur"]), VMODEL, mode)
+                p = videogen.start(TOKEN, prompt, data, videogen.clip_seconds(c.get("clip_sec") or c["dur"]), VMODEL, mode)
             except Exception as ex:
                 st.error(f"{c['id']}: {ex}")
                 continue
@@ -1800,8 +1813,11 @@ elif cur == "clip":
                         collect(jobs, box)
                     box.update(label="생성 끝", state="complete")
                 st.rerun()
-    st.caption(f"모델 {VMODEL} · 확정 스틸을 첫 프레임으로 씁니다. '짧은 움직임'과 '완전 영상' 컷만 3초부터 만들고 편집에서 컷 길이만큼 자릅니다. "
-               "'정지+카메라' 컷은 편집 단계에서 스틸에 카메라 움직임을 넣습니다. 버튼 한 번에 한 화만 진행합니다.")
+    sec_all = sum(videogen.clip_seconds(c.get("clip_sec") or c["dur"]) for c in moving)
+    sec_todo = sum(videogen.clip_seconds(c.get("clip_sec") or c["dur"]) for c in missing)
+    st.caption(f"모델 {VMODEL} · 확정 스틸을 첫 프레임으로 씁니다. 영상 {len(moving)}컷 · 합계 {sec_all}초 (이번에 만들 분량 {len(missing)}컷 · {sec_todo}초). "
+               "컷마다 3초부터 초 단위로 과금됩니다. 말하는 컷은 대사 길이만큼 만들고 입이 움직입니다(대사와 정확히 맞추는 립싱크는 아직 없음). "
+               "화면 글자 컷만 정지 그림으로 둡니다. 버튼 한 번에 한 화만 진행합니다.")
 
     cols = st.columns(4)
     for i, c in enumerate(cuts):

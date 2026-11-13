@@ -24,6 +24,7 @@ ANGLES = ["정면", "3/4 측면", "측면", "뒤에서", "어깨 너머", "하�
 MOTIONS = {"still": "정지+카메라", "move": "짧은 움직임", "video": "완전 영상"}
 CUTS_LO, CUTS_HI = 12, 18      # 한 화 컷 수 허용 범위 (목표 14~16)
 MAX_VIDEO = 4          # 한 화 완전 영상 컷 상한 (마지막 컷·클라이맥스 포함)
+ALL_MOVE = True        # v1.2: 모든 컷을 영상으로 (화면 글자 컷만 정지). False 면 아래 상한으로 일부 컷만 영상 (절약)
 MAX_MOVING = 7         # 한 화 영상 생성 컷(짧은 움직임+완전 영상) 상한. 컷마다 최소 3초씩 과금되므로 비용 상한 역할
 DUR_MIN, DUR_MAX = 1.5, 4.0    # 보통 컷 길이
 STILL_MAX = 3.0                # 정지+카메라 컷 최대 길이 (3초를 넘으면 PPT처럼 보이기 시작)
@@ -362,7 +363,7 @@ def need_sec(c: dict) -> float:
 def cap_sec(c: dict, last: bool = False) -> float:
     """컷 하나의 최대 길이: 버티기 컷 6초, 말하는 얼굴 2.5초, 정지 컷 3초, 보통 4초. 대사가 더 길면 대사 길이."""
     top = HOLD_MAX if c.get("climax") else STILL_MAX if c.get("motion") == "still" else DUR_MAX
-    if c.get("dialogue") and c["dialogue"].get("on_screen"):
+    if c.get("dialogue") and c["dialogue"].get("on_screen") and c.get("motion") == "still":
         top = TALK_MAX
     return max(top, need_sec(c))
 
@@ -448,6 +449,31 @@ def fix_screens(cuts: list) -> list:
     return cuts
 
 
+def is_talk(c: dict) -> bool:
+    """말하는 얼굴이 화면에 보이는 컷."""
+    return bool(c.get("dialogue") and c["dialogue"].get("on_screen")) and not is_screen_cut(c)
+
+
+def apply_move(cuts: list, on: bool = True) -> bool:
+    """모든 컷 영상 방식 켜기/끄기 (이미 만든 콘티에도 적용). 켜면 정지 컷을 '짧은 움직임'으로 올리고 원래 값은 motion0 에 남긴다.
+    화면 글자 컷은 그대로 정지. 끄면 motion0 으로 되돌린다. 바뀐 컷이 있으면 True."""
+    changed = False
+    for c in cuts:
+        if on and c.get("motion") == "still" and not is_screen_cut(c):
+            c["motion0"], c["motion"] = "still", "move"
+            changed = True
+        elif not on and c.get("motion0"):
+            c["motion"] = c.pop("motion0")
+            changed = True
+    return changed
+
+
+def talk_seconds(c: dict, dub_sec: float | None = None) -> float:
+    """영상으로 만들 길이: 컷 길이와 대사 길이(더빙이 있으면 실제 길이 + 0.3초, 없으면 음절 수로 어림) 중 긴 쪽."""
+    need = (dub_sec + 0.3) if dub_sec else (need_sec(c) if c.get("dialogue") else 0)
+    return max(float(c.get("dur") or 3), need)
+
+
 def cap_video(cuts: list, limit: int = MAX_VIDEO, moving: int = MAX_MOVING) -> list:
     """움직임 규칙을 코드로 강제한다.
     - 마지막 컷·클라이맥스는 완전 영상. 클라이맥스(버티기 컷)는 화당 1개만 남김(가장 긴 컷).
@@ -460,6 +486,14 @@ def cap_video(cuts: list, limit: int = MAX_VIDEO, moving: int = MAX_MOVING) -> l
         keep = max(clx, key=lambda c: c["dur"])
         for c in clx:
             c["climax"] = c is keep
+    if ALL_MOVE:
+        cuts[-1]["motion"] = "video"
+        for c in cuts:
+            if c["climax"]:
+                c["motion"] = "video"
+        fix_screens(cuts)
+        apply_move(cuts, True)
+        return cuts
     for c in cuts:
         if c.get("dialogue") and c["dialogue"].get("on_screen"):
             c["motion"] = "still"
@@ -498,9 +532,9 @@ def check(cuts: list, known_chars: set, known_locs: set, scenes: list | None = N
             issues.append({"id": "-", "level": "fix", "msg": "컷이 없는 장면: " + ", ".join(f"S#{n}" for n in miss)})
     nv = sum(1 for c in cuts if c["motion"] == "video")
     nm = sum(1 for c in cuts if c["motion"] in ("move", "video"))
-    if nv > MAX_VIDEO:
+    if not ALL_MOVE and nv > MAX_VIDEO:
         issues.append({"id": "-", "level": "todo", "msg": f"완전 영상 컷 {nv}개 (상한 {MAX_VIDEO}개, 비용·실패 위험)"})
-    if nm > MAX_MOVING:
+    if not ALL_MOVE and nm > MAX_MOVING:
         issues.append({"id": "-", "level": "todo", "msg": f"영상 생성 컷 {nm}개 (상한 {MAX_MOVING}개, 컷마다 최소 3초 과금)"})
     if sum(1 for c in cuts if c["climax"]) > 1:
         issues.append({"id": "-", "level": "todo", "msg": "버티기 컷(클라이맥스)이 2개 이상"})
@@ -530,9 +564,9 @@ def check(cuts: list, known_chars: set, known_locs: set, scenes: list | None = N
             need = syl(d["text"]) / 4 + 0.2
             if need > c["dur"] + 0.05:
                 issues.append({"id": c["id"], "level": "fix", "msg": f"대사 {syl(d['text'])}음절: 최소 {need:.1f}초 필요 (현재 {c['dur']}초)"})
-            if d.get("on_screen") and c["motion"] != "still":
+            if not ALL_MOVE and d.get("on_screen") and c["motion"] != "still":
                 issues.append({"id": c["id"], "level": "fix", "msg": "말하는 얼굴이 영상 컷 (립싱크 없음 → 정지 컷으로)"})
-            if d.get("on_screen") and c["dur"] > TALK_MAX + 0.05:
+            if d.get("on_screen") and c.get("motion") == "still" and c["dur"] > TALK_MAX + 0.05:
                 issues.append({"id": c["id"], "level": "todo", "msg": f"말하는 얼굴 {c['dur']}초 (2.5초 넘는 부분은 듣는 사람 컷으로 넘기기)"})
         if LOGO_WORDS.search(c.get("frame_ko", "") + " " + c.get("frame_en", "")):
             issues.append({"id": c["id"], "level": "todo", "msg": "첫 장면에 로고·간판 표현 (컷마다 다르게 그려짐 → '벽의 엠블럼'으로, 글자는 편집에서)"})
@@ -658,10 +692,16 @@ def clip_seconds(dur: float) -> int:
 
 def video_prompt(c: dict, cast: dict) -> str:
     who = [cast.get(ch.split(":")[0], ch) for ch in c["chars"]]
-    dl = "Any voice is added in editing: nobody in frame moves their lips, mouths stay closed." if c["dialogue"] else ""
+    talk = is_talk(c)
+    spk = cast.get(c["dialogue"]["who"], c["dialogue"]["who"]) if talk else ""
+    dl = (f"The speaker ({spk}) says one line to the other person: the lips move in natural speech for the whole clip, with small head "
+          "movement and blinking. Everybody else keeps the mouth closed. No sound is needed." if talk else
+          "Any voice is added in editing: nobody in frame moves their lips, mouths stay closed." if c["dialogue"] else "")
     mv = {"still": "Almost no motion: only a slow camera move on the still image.",
-          "move": "One small, simple movement only, as described; everything else stays still. Mouth closed.",
+          "move": "One small, simple movement only, as described; everything else stays still." + ("" if talk else " Mouth closed."),
           "video": "Full natural acting motion as described."}[c["motion"]]
+    if c.get("motion0") == "still" and c.get("chars"):      # 정지 컷으로 짜였던 컷: 살아 있는 촬영 화면처럼
+        mv += " This is a live film take, not a frozen photo: the people breathe, blink and shift their weight slightly; hair and fabric move a little."
     parts = [f"Shot: {SHOT_EN.get(c['size'], 'medium shot')}, {ANG_EN.get(c['angle'], 'eye level')}, vertical 9:16.",
              f"Camera: {CAM_EN.get(c['camera'], CAM_EN['고정'])}",
              ("Characters: " + "; ".join(who) + ".") if who else "",
@@ -672,5 +712,5 @@ def video_prompt(c: dict, cast: dict) -> str:
              ("Every phone screen and monitor screen stays a plain black glass surface for the whole clip; no characters, no icons, "
               "no interface and no light appear on it.") if c.get("screen_text") else "",
              "Keep the face, hair and clothing of the first frame unchanged for the whole clip; no new people enter the frame.",
-             f"Duration: {clip_seconds(c['dur'])} seconds. Photoreal, natural light, no text on screen."]
+             f"Duration: {clip_seconds(c.get('clip_sec') or c['dur'])} seconds. Photoreal, natural light, no text on screen."]
     return " ".join(x for x in parts if x)

@@ -112,10 +112,10 @@ def draw_screen_text(still: bytes, text: str, box: tuple | None = None) -> bytes
     x0, y0, x1, y1 = box or (0.25, 0.38, 0.75, 0.6)
     bx, by, bw, bh = x0 * im.width, y0 * im.height, (x1 - x0) * im.width, (y1 - y0) * im.height
     parts = [p.strip() for p in str(text).replace("\\n", "\n").split("\n") if p.strip()] or [str(text)]
-    size = int(min(bh / (len(parts) * 1.5), bw * 0.9 / max(len(max(parts, key=len)), 2)))   # 한글 한 글자 폭 ≈ 글자 크기
-    size = max(18, min(size, int(im.height * 0.06)))
+    size = int(min(bh / (len(parts) * 1.5), bw * 0.62 / max(len(max(parts, key=len)), 2)))   # 한글 한 글자 폭 ≈ 글자 크기, 화면 폭의 62% 안
+    size = max(18, min(size, int(im.height * 0.042)))
     f = font(size)
-    lines = [ln for p in parts for ln in wrap(p, f, int(bw * 0.92), d)]
+    lines = [ln for p in parts for ln in wrap(p, f, int(bw * 0.8), d)]
     total = len(lines) * int(size * 1.35)
     y = by + (bh - total) / 2
     for ln in lines:
