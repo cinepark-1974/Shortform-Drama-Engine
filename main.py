@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.1"
+VERSION = "v1.1.1"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -507,7 +507,7 @@ def header(work):
     title = work["title"] if work else "새 작품"
     meta = f"저장소 <b>{store.kind}</b>"
     if work:
-        meta += f"<br>송출 <b>{work.get('channel','')}</b> · 최종 저장 <b>{work.get('updated','')}</b>"
+        meta += f"<br>송출 <b>{work.get('channel') or '미정'}</b> · 최종 저장 <b>{work.get('updated','')}</b>"
     st.markdown(f'<div class="brand"><span class="m">{meta}</span><div class="co">BLUE JEANS PICTURES · SHORTFORM DRAMA ENGINE'
                 f'<span class="ver">{VERSION}</span></div><div class="ti">{title} 제작 대시보드</div></div>', unsafe_allow_html=True)
 
@@ -570,7 +570,7 @@ if not work:
     with c1:
         up = st.file_uploader("Shortform-Engine 대본 (docx · txt)", type=["docx", "txt"])
     with c2:
-        channel = st.text_input("송출 채널", "HASIRA_yo!")
+        channel = st.text_input("송출 채널", "", placeholder="채널 이름 (나중에 01 대본에서 바꿀 수 있음)")
         subs = st.multiselect("자막 언어", ["한국어", "영어", "일본어"], default=["한국어", "영어"])
     if up:
         raw = up.getvalue()
@@ -607,6 +607,12 @@ if locked(work, cur):
 # ===== 01 대본 =====
 if cur == "script":
     brief("script", "작품 정리 완료" if B else f"{summ['episodes']}화 읽기 완료 · 작품 정리 필요")
+    with st.expander(f"송출 채널 · {work.get('channel') or '미정'}"):
+        ch_new = st.text_input("송출 채널 이름", work.get("channel", ""), key="ch_edit")
+        if st.button("채널 이름 저장", disabled=ch_new.strip() == work.get("channel", "")):
+            work["channel"] = ch_new.strip()
+            save(work)
+            st.rerun()
     t_bible, t_board, t_read, t_out = st.tabs(["작품 정리", "화별 진행판", "대본 보기", "정리본 내보내기"])
 
     with t_bible:
