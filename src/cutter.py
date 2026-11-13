@@ -417,7 +417,21 @@ def normalize(cuts: list, ep: dict, bible: dict | None = None) -> list:
             "motion_en": str(c.get("motion_en") or c.get("action_en") or "").strip(), "dialogue": d,
             "screen_text": str(c.get("screen_text") or ""), "sfx": str(c.get("sfx") or ""),
         })
-    return fit_durations(cap_video(unify_looks(out)))
+    return fit_durations(cap_video(unify_looks(clean_words(out))))
+
+
+def clean_words(cuts: list) -> list:
+    """그림·영상 지시문에 들어가는 영어 문장에서 금지어를 코드로 고친다 (or → and, slightly·maybe·might·looks like 삭제).
+    사람이 콘티를 손으로 고치지 않아도 되게."""
+    for c in cuts:
+        for k in ("frame_en", "motion_en", "action_en"):
+            t = c.get(k) or ""
+            t = re.sub(r"\s+or\s+", " and ", t)
+            t = re.sub(r"(?i)\b(slightly|maybe)\s+", "", t)
+            t = re.sub(r"(?i)\bmight\b", "does", t)
+            t = re.sub(r"(?i)\blooks like\b", "is", t)
+            c[k] = t
+    return cuts
 
 
 def is_screen_cut(c: dict) -> bool:
@@ -526,8 +540,10 @@ def check(cuts: list, known_chars: set, known_locs: set, scenes: list | None = N
             issues.append({"id": c["id"], "level": "todo", "msg": "첫 장면에 동작이 둘 이상 (사진 한 장으로 찍히는 한 순간으로)"})
         if WEAR_WORDS.search(c["action"] + " " + c.get("frame_ko", "")):
             issues.append({"id": c["id"], "level": "fix", "msg": "몸에 거는 소품 표현 (손에 들거나 인서트로)"})
-        for b in banned_in(" ".join([c["action"], c.get("frame_ko", ""), c.get("frame_en", ""), c.get("motion_en", "")])):
-            issues.append({"id": c["id"], "level": "fix", "msg": f"행동 문장 금지어 {b}"})
+        for b in banned_in(" ".join([c.get("frame_en", ""), c.get("motion_en", "")])):       # 그림·영상에 들어가는 영어 문장
+            issues.append({"id": c["id"], "level": "fix", "msg": f"영어 지시 문장 금지어 {b}"})
+        for b in banned_in(" ".join([c["action"], c.get("frame_ko", "")])):                  # 한국어는 화면 표시용 → 알림만
+            issues.append({"id": c["id"], "level": "todo", "msg": f"한국어 문장에 애매한 표현 {b}"})
     return issues
 
 

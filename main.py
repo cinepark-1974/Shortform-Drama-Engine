@@ -323,10 +323,12 @@ def refresh_cut_status(work: dict | None):
     for k, rec in work["cuts"].items():
         try:
             scenes = [s_["no"] for s_ in eps[int(k) - 1]["scenes"]]
-            iss = cutter.check(cutter.fix_screens(rec["cuts"]), kc, kl, scenes)
+            iss = cutter.check(cutter.fix_screens(cutter.clean_words(rec["cuts"])), kc, kl, scenes)
         except Exception:
             continue
-        work.setdefault("eps", {}).setdefault(k, {})["cut"] = "fix" if any(i["level"] == "fix" for i in iss) else "done"
+        # 콘티가 있으면 그 단계는 끝난 것으로 본다. 점검에서 걸린 항목은 빨간 표시로만 남기고 다음 단계를 막지 않는다.
+        e_ = work.setdefault("eps", {}).setdefault(k, {})
+        e_["cut"], e_["cut_fix"] = "done", sum(1 for i in iss if i["level"] == "fix")
 
 
 def stage_counts(work: dict | None) -> dict:
@@ -420,7 +422,7 @@ def heatmap(work: dict, levels: list[int], big: bool = False) -> str:
     for i, lv in enumerate(levels, start=1):
         bg, fg = shade(lv)
         e_s = eps.get(str(i), {})
-        bad = e_s.get("cut") == "fix" or e_s.get("still_qc", 0) > 0 or e_s.get("clip_qc", 0) > 0
+        bad = e_s.get("cut_fix", 0) > 0 or e_s.get("still_qc", 0) > 0 or e_s.get("clip_qc", 0) > 0
         cls = ("g " if (i - 1) % BINGE == 0 else "") + ("fx" if bad else "")
         pad = "padding:7px 0;font-size:11px;" if big else ""
         cells += (f'<div class="{cls}" style="{pad}background:{bg};color:{fg}" '
@@ -1127,8 +1129,8 @@ elif cur == "cut":
     allcuts = work.setdefault("cuts", {})
     n_ep = len(parsed["episodes"])
     done_n = sum(1 for k, v in work.get("eps", {}).items() if v.get("cut") == "done")
-    fix_n = sum(1 for k, v in work.get("eps", {}).items() if v.get("cut") == "fix")
-    brief("cut", f"분할 {done_n + fix_n} / {n_ep}화" + (f" · 고칠 화 {fix_n}" if fix_n else ""))
+    fix_n = sum(1 for k, v in work.get("eps", {}).items() if v.get("cut_fix", 0) > 0)
+    brief("cut", f"콘티 {done_n} / {n_ep}화" + (f" · 점검 표시 {fix_n}화" if fix_n else ""))
     known_c = {c["name"] for c in B["characters"]}
     known_l = {l["id"] for l in B["locations"]}
     castdesc = {c: (work.get("cast", {}).get(c, {}).get("prompt_en", "") or c).split(".")[0] for c in known_c}
@@ -1198,7 +1200,8 @@ elif cur == "cut":
                 e_s.pop(st_k, None)
         allcuts[k] = {"cuts": cuts, "src": src, "at": now(), "changes": changes or []}
         iss = cutter.check(cuts, known_c, known_l, [s["no"] for s in parsed["episodes"][ep_no - 1]["scenes"]])
-        work.setdefault("eps", {}).setdefault(str(ep_no), {})["cut"] = "fix" if any(i["level"] == "fix" for i in iss) else "done"
+        e_ = work.setdefault("eps", {}).setdefault(str(ep_no), {})
+        e_["cut"], e_["cut_fix"] = "done", sum(1 for i in iss if i["level"] == "fix")
 
     c1, c2, c3 = st.columns([1, 1, 2])
     with c1:
