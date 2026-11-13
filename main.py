@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.2.1"
+VERSION = "v1.2.2"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -1869,6 +1869,72 @@ elif cur == "clip":
             bad = rescan()
         st.toast(f"정지화면·카메라만 움직인 컷 {len(bad)}개" + (f": {', '.join(bad)}" if bad else ""))
         st.rerun()
+
+    # ── 콘솔 차선: 다른 곳(Morphic·Higgsfield·AICRON 등)에서 만든 영상을 받아 같은 자리에 넣는다 ──
+    with st.expander("다른 곳에서 만든 영상 넣기 (Morphic · Higgsfield · AICRON 등)"):
+        st.caption("① 꾸러미를 내려받습니다: 컷마다 스틸(첫 장면)·더빙 음성·지시문이 들어 있습니다. ② 바깥 도구에서 스틸로 영상을 만들고, 말하는 컷은 더빙 음성으로 립싱크를 합니다. "
+                   "③ 파일 이름을 컷 번호로 시작하게 저장해(예: 1-5.mp4) 한꺼번에 올립니다. 올린 영상은 엔진이 검수하고 편집에 씁니다.")
+        import io as _io, re as _re, zipfile as _zip
+        k1, k2 = st.columns(2)
+        with k1:
+            if st.button(f"EP {ep_no} 꾸러미 만들기 ({len(moving)}컷)"):
+                buf, lines = _io.BytesIO(), [f"{work['title']} EP{ep_no} — 영상 꾸러미", "파일 이름: 컷번호.jpg = 첫 장면, 컷번호.mp3 = 더빙 음성. 만든 영상은 컷번호.mp4 로 저장해 올립니다.", ""]
+                with _zip.ZipFile(buf, "w", _zip.ZIP_DEFLATED) as z:
+                    for c in moving:
+                        pick = srec.get(c["id"], {}).get("pick")
+                        d = img_bytes(pick) if pick else None
+                        if d:
+                            z.writestr(f"{c['id']}.jpg", d)
+                        dk = drec0.get(c["id"], {}).get("key")
+                        if dk:
+                            try:
+                                z.writestr(f"{c['id']}.mp3", store.get_bytes(dk))
+                            except Exception:
+                                pass
+                        dl = c.get("dialogue") or {}
+                        lines += [f"=== {c['id']} · {c['size']} · {videogen.clip_seconds(c.get('clip_sec') or c['dur'])}초"
+                                  + (" · 말하는 컷(립싱크)" if c.get("talk") else ""),
+                                  f"움직임: {c.get('motion_ko') or c.get('action', '')}",
+                                  (f"대사({dl.get('who', '')}): {dl.get('text', '')}" if dl else "대사 없음"),
+                                  "지시문:", cutter.video_prompt(c, castdesc), ""]
+                    z.writestr("지시문.txt", "\n".join(lines))
+                st.session_state["console_pack"] = (ep_no, buf.getvalue())
+            pack = st.session_state.get("console_pack")
+            if pack and pack[0] == ep_no:
+                st.download_button(f"꾸러미 내려받기 (EP{ep_no}.zip)", pack[1], file_name=f"EP{ep_no:03d}_console.zip", mime="application/zip")
+        with k2:
+            ups = st.file_uploader("만든 영상 올리기 (여러 개 한꺼번에, 파일 이름이 컷 번호로 시작)", type=["mp4", "mov", "webm"],
+                                   accept_multiple_files=True, key=f"console_up_{ep_no}")
+            found = []
+            for f in ups or []:
+                m = _re.match(r"\s*(\d+-\d+)", f.name)
+                cid = m.group(1) if m else None
+                found.append((f, cid if cid in cutmap else None))
+            miss_names = [f.name for f, cid in found if not cid]
+            if miss_names:
+                st.warning("컷 번호를 못 찾은 파일: " + ", ".join(miss_names) + " — 이름을 '1-5.mp4'처럼 바꿔 다시 올려 주세요.")
+            okf = [(f, cid) for f, cid in found if cid]
+            if st.button(f"올린 영상 {len(okf)}개 넣기", type="primary", disabled=not okf):
+                with st.status("올린 영상 저장·검수 중…") as box:
+                    for f, cid in okf:
+                        data = f.getvalue()
+                        c = cutmap[cid]
+                        if c["motion"] == "still":          # 화면 글자 컷 등 정지로 잡힌 컷에 영상을 올린 경우: 영상 컷으로
+                            c["motion0"], c["motion"] = c.get("motion0") or "still", "move"
+                        k = f"works/{work['id']}/clip/ep{ep_no:03d}/{cid}_up{uuid.uuid4().hex[:6]}.mp4"
+                        store.put_bytes(k, data, "video/mp4")
+                        old_cell = rec.get(cid, {})
+                        rec[cid] = {"takes": old_cell.get("takes", []) + [k], "qc_by": old_cell.get("qc_by", {}), "key": k,
+                                    "still": srec.get(cid, {}).get("pick"), "status": "succeeded", "tries": 0, "manual": True,
+                                    "prompt": cutter.video_prompt(c, castdesc), "model": "직접 올림"}
+                        box.update(label=f"{cid} 검수 중…")
+                        q = judge_take(cid, data)
+                        rec[cid]["qc"] = q
+                        rec[cid]["qc_by"][k] = q
+                    finish()
+                    save(work)
+                    box.update(label="넣기 완료", state="complete")
+                st.rerun()
 
     cols = st.columns(4)
     for i, c in enumerate(cuts):
