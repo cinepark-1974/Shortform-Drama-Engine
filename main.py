@@ -1484,6 +1484,43 @@ elif cur == "still":
             st.markdown(f"<div class='small' style='margin-top:8px'>검수 합격 <b>{ok_n}</b> · 불합격 <b style='color:var(--fix)'>{len(bad_cuts)}</b>"
                         f" · 검수 전 <b>{len(unchecked)}</b></div>", unsafe_allow_html=True)
 
+    made = [c for c in cuts if rec.get(c["id"], {}).get("cands")]
+    if made:
+        r1, r2 = st.columns([1, 3])
+        with r1:
+            if st.button(f"이 화 스틸 전체 다시 만들기 ({len(cuts)}컷)", key="still_redo",
+                         help="콘티는 그대로 두고 이 화의 스틸을 모두 새로 만듭니다. 지금 스틸과 영상은 보관함으로 옮깁니다."):
+                st.session_state["still_redo_ask"] = ep_no
+        if st.session_state.get("still_redo_ask") == ep_no:
+            with r2:
+                st.markdown(f"<span class='tag fix'>확인</span> <span class='small'>EP {ep_no} 스틸 {len(made)}컷과 이 화의 영상을 보관함으로 옮기고 "
+                            f"{len(cuts)}컷을 새로 만듭니다 (high 기준 약 ${len(cuts) * 0.165:.1f}, 다시 만들기 제외). "
+                            "배경·소품이 흔들려서 다시 하는 경우에는 03 콘티에서 '콘티 다시 만들기'를 먼저 하는 것이 맞습니다 (장소 시점이 콘티에서 정해짐).</span>",
+                            unsafe_allow_html=True)
+                y, n_ = st.columns(2)
+                with y:
+                    go_redo = st.button("네, 전체 다시 만들기", type="primary", key="still_redo_yes", disabled=not KEYS.get("OPENAI_API_KEY"))
+                with n_:
+                    if st.button("취소", key="still_redo_no"):
+                        st.session_state.pop("still_redo_ask", None)
+                        st.rerun()
+            if go_redo:
+                st.session_state.pop("still_redo_ask", None)
+                k = str(ep_no)
+                for box in ("stills", "clips"):
+                    if work.get(box, {}).get(k):
+                        work.setdefault(box + "_old", {}).setdefault(k, []).append({"at": now(), "data": work[box].pop(k)})
+                for st_k in ("still", "clip", "still_qc", "clip_qc"):
+                    eps_state.setdefault(k, {}).pop(st_k, None)
+                for c in cuts:
+                    st.session_state.pop(f"sp_{c['id']}", None)
+                save(work)
+                cuts, rec, picked = still_state(ep_no)
+                with st.status(f"EP {ep_no} 스틸 {len(cuts) * n_c}장 새로 생성{' · 자동 검수' if AUTO_QC else ''} 중… (4컷씩 동시)") as s_:
+                    make([(c, cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c), set(set_loc(work))), refs_for(c)) for c in cuts])
+                    finish()
+                    s_.update(label="생성 완료", state="complete")
+                st.rerun()
     old_p = [c for c in cuts if rec.get(c["id"], {}).get("prompt")]
     if old_p and st.button(f"이 화 지시문 전체 새로 쓰기 ({len(old_p)}컷 · 비용 없음)",
                            help="엔진 규칙·소품·기준 그림이 바뀐 뒤에 누릅니다. 그림은 그대로 두고 지시문만 지금 규칙으로 다시 조립합니다. 그다음 다시 만들 컷만 '이 컷 다시'를 누르세요."):
