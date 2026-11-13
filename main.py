@@ -331,8 +331,20 @@ def refresh_cut_status(work: dict | None):
         e_["cut"], e_["cut_fix"] = "done", sum(1 for i in iss if i["level"] == "fix")
 
 
+def refresh_clip_status(work: dict | None):
+    """영상을 만든 뒤 스틸이 바뀐 컷이 있으면 그 화의 영상 단계를 '진행 중'으로 되돌린다 (사람이 찾아보지 않아도 되게)."""
+    if not work:
+        return
+    for k, rec in (work.get("clips") or {}).items():
+        srec = work.get("stills", {}).get(k, {})
+        if any(c.get("key") and c.get("still") and c["still"] != srec.get(cid, {}).get("pick") for cid, c in rec.items()):
+            if work.get("eps", {}).get(k, {}).get("clip") == "done":
+                work["eps"][k]["clip"] = "doing"
+
+
 def stage_counts(work: dict | None) -> dict:
     refresh_cut_status(work)
+    refresh_clip_status(work)
     out = {k: (0, 0) for k, *_ in STAGES}
     if not work:
         return out
@@ -1661,7 +1673,12 @@ elif cur == "clip":
     rec = clips.setdefault(str(ep_no), {})
     srec = stills.get(str(ep_no), {})
     moving = [c for c in cuts if c["motion"] in ("move", "video")]
-    missing = [c for c in moving if not rec.get(c["id"], {}).get("key")]
+    def stale(c) -> bool:
+        """영상을 만든 뒤에 스틸이 바뀐 컷: 영상이 예전 스틸에서 시작하므로 다시 만들어야 한다."""
+        cell = rec.get(c["id"], {})
+        return bool(cell.get("key") and cell.get("still") and cell["still"] != srec.get(c["id"], {}).get("pick"))
+
+    missing = [c for c in moving if not rec.get(c["id"], {}).get("key") or stale(c)]
     running = {cid: r["get"] for cid, r in rec.items() if r.get("get") and r.get("status") not in videogen.DONE}
 
     cutmap = {c["id"]: c for c in cuts}
@@ -1670,7 +1687,7 @@ elif cur == "clip":
         return bool(cell.get("fallback")) and not cell.get("qc_ok")
 
     def finish():
-        ok = all(rec.get(c["id"], {}).get("key") for c in moving)
+        ok = all(rec.get(c["id"], {}).get("key") and not stale(c) for c in moving)
         e_s = eps_state.setdefault(str(ep_no), {})
         e_s["clip"] = "done" if ok else "doing"
         e_s["clip_qc"] = sum(1 for c in moving if clip_bad(rec.get(c["id"], {})))
@@ -1748,7 +1765,8 @@ elif cur == "clip":
                 st.error(f"{c['id']}: {ex}")
                 continue
             old = rec.get(c["id"], {})
-            rec[c["id"]] = {**{k: v for k, v in old.items() if k in ("takes", "qc_by", "key")},
+            keep = ("takes", "qc_by", "key") if old.get("still") in (None, still) else ("takes", "qc_by")   # 스틸이 바뀌었으면 예전 영상은 확정에서 뺌
+            rec[c["id"]] = {**{k: v for k, v in old.items() if k in keep}, "still": still,
                             "tries": old.get("tries", 0) + 1 if again else 0,
                             "pred": p["id"], "get": p["get"], "status": p["status"], "prompt": prompt, "mode": mode, "model": VMODEL}
             jobs[c["id"]] = p["get"]
@@ -1788,6 +1806,9 @@ elif cur == "clip":
                     st.image(d, width="stretch")
                 st.caption("편집에서 카메라 움직임만 넣습니다")
                 continue
+            if stale(c):
+                st.markdown("<span class='tag fix'>스틸이 바뀜</span> <span class='small'>이 영상은 예전 스틸에서 시작합니다. 위의 '영상 만들기'를 누르면 이 컷만 다시 만듭니다.</span>",
+                            unsafe_allow_html=True)
             q = cell.get("qc")
             if cell.get("fallback") and not cell.get("qc_ok"):
                 st.markdown(f"<span class='tag fix'>정지+카메라로 전환</span><div class='small' style='color:var(--fix)'>{qc.label(q)}</div>",
