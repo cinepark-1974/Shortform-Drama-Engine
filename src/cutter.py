@@ -530,7 +530,8 @@ def shows_emblem(c: dict) -> bool:
 
 
 def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None, props: dict | None = None,
-                 look_text: dict | None = None, set_props: set | None = None) -> str:
+                 look_text: dict | None = None, set_props: set | None = None, prop_text: dict | None = None) -> str:
+    """prop_text = {소품 이름: 소품에 인쇄된 글자}. 글자가 있는 소품이 이 컷에 나오면 그 글자만 그림에 허용한다."""
     """스틸(컷 그림) 지시문: 영어, 확정형. cast[name]=외모 영어 묘사, locs[id]=(이름, 영어 묘사).
     refs = 함께 넣는 기준 그림 순서 (인물 이름 또는 장소 id). 지시문에서 '기준 그림 몇 번'으로 짚어 준다."""
     refs = refs or []
@@ -568,9 +569,15 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None,
                       "Where the location reference shows no emblem, this shot shows no emblem")
     else:
         place = (loc[1] or loc[0]).rstrip(". ") + ". Every sign and every emblem is a plain abstract shape with no letters"
-    plist, slist = [], []
+    plist, slist, texts = [], [], []
     for n in c.get("props", []):
         d = (props or {}).get(n) or n
+        t = (prop_text or {}).get(n, "").strip()
+        if t:
+            texts.append(t)
+            d = d.rstrip(". ") + f', with the Korean text "{t}" printed on it in plain black letters'
+            if "소품:" + n in pos:
+                d += ", the letters copied exactly from its reference image"
         (slist if n in (set_props or set()) else plist).append(
             f"{d}, the same object as reference image {pos['소품:' + n]}" if "소품:" + n in pos else d)
     lines = [f"Vertical 9:16 still frame from a Korean drama. {SHOT_EN.get(c['size'], 'medium shot').capitalize()}, {ANG_EN.get(c['angle'], 'eye level')}.",
@@ -584,7 +591,9 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None,
              ("Objects that stand in the room and are never held; wherever one of them is in frame it is exactly this object, "
               "one of each: " + "; ".join(slist) + ".") if slist else "",
              "Any prop named in the scene is held in the hands only, never worn.",
-             f"Any screen or paper in frame is blank; text is added in editing." if c["screen_text"] else "No text anywhere in the image."]
+             (f"The only writing in the image is the printed text " + " and ".join(f'"{t}"' for t in texts) + " on the prop; "
+              "every screen, sign and paper is blank.") if texts else
+             ("Any screen or paper in frame is blank; text is added in editing." if c["screen_text"] else "No text anywhere in the image.")]
     return " ".join(x for x in lines if x)
 
 

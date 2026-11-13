@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v0.9"
+VERSION = "v0.9.1"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -236,6 +236,11 @@ def view_notes(work: dict) -> dict:
     """콘티에 넘기는 장소 시점 목록 {장소 id: {시점 이름: 한 줄 설명}}."""
     return {lid: {k: (v.get("note") or v.get("prompt_en", ""))[:100] for k, v in (info.get("views") or {}).items()}
             for lid, info in work.get("loc", {}).items() if info.get("views")}
+
+
+def prop_texts(work: dict) -> dict:
+    """글자가 인쇄된 소품 {소품 이름: 글자}."""
+    return {n: v["text"] for n, v in work.get("props", {}).items() if v.get("text")}
 
 
 def set_loc(work: dict) -> dict:
@@ -1088,6 +1093,12 @@ elif cur == "cast":
                     info["kind"], info["loc"] = kd, (lid if kd == "set" else "")
                     save(work)
                     st.rerun()
+                ptxt = st.text_input("소품에 인쇄된 글자 (없으면 비워 둠)", info.get("text", ""), key=f"pk_text_{name}", placeholder="임시출입증",
+                                     help="이 글자만 그림에 허용합니다. 글자가 있는 소품은 기준 그림을 직접 올리는 것이 정확합니다 (엔진이 만드는 소품 그림에는 글자를 넣지 않습니다).")
+                if ptxt.strip() != info.get("text", ""):
+                    info["text"] = ptxt.strip()
+                    save(work)
+                    st.rerun()
                 asset_board("prop", name, name, info, "3:4", 2)
                 if st.button("이 소품 삭제", key=f"pdel_{name}"):
                     props.pop(name)
@@ -1274,7 +1285,7 @@ elif cur == "cut":
                         f"{' · 효과음 ' + c['sfx'] if c['sfx'] else ''}</div></div>", unsafe_allow_html=True)
             with st.expander(f"{c['id']} 지시문 보기"):
                 st.markdown("**스틸 지시문** (gpt-image-2, 기준 그림 함께)")
-                st.code(cutter.still_prompt(c, castdesc, locdesc, None, propdesc, look_text(work, c), set(set_loc(work))), language=None)
+                st.code(cutter.still_prompt(c, castdesc, locdesc, None, propdesc, look_text(work, c), set(set_loc(work)), prop_texts(work)), language=None)
                 st.markdown("**영상 지시문**")
                 st.code(cutter.video_prompt(c, castdesc), language=None)
         with st.expander("컷 데이터 직접 고치기 (JSON)"):
@@ -1433,7 +1444,7 @@ elif cur == "still":
         label = f"EP {ep_no} 스틸 만들기 ({len(missing)}컷)" if missing else f"EP {ep_no} 스틸 완료 · {picked}/{len(cuts)}컷 확정"
         if st.button(label, type="primary", disabled=not (KEYS.get("OPENAI_API_KEY") and missing)):
             with st.status(f"EP {ep_no} 스틸 {len(missing) * n_c}장 생성{' · 자동 검수' if AUTO_QC else ''} 중… (4컷씩 동시, 2~6분)") as s:
-                make([(c, cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c), set(set_loc(work))), refs_for(c)) for c in missing])
+                make([(c, cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c), set(set_loc(work)), prop_texts(work)), refs_for(c)) for c in missing])
                 finish()
                 s.update(label="생성 완료", state="complete")
             st.rerun()
@@ -1456,7 +1467,7 @@ elif cur == "still":
                     try:
                         return qc.judge_still(KEYS["ANTHROPIC_API_KEY"], img_bytes(cell["pick"]),
                                               [(n, img_bytes(k)) for n, k in refs_for(c)], c,
-                                              cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c), set(set_loc(work))), MODEL)
+                                              cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c), set(set_loc(work)), prop_texts(work)), MODEL)
                     except Exception as ex:
                         return {"pass": True, "items": {}, "fails": [], "note": f"검수 오류: {str(ex)[:120]}"}
                 with ThreadPoolExecutor(4) as ex:
@@ -1473,7 +1484,7 @@ elif cur == "still":
         if st.button(f"불합격 컷 고치기 ({len(bad_cuts)}컷)", disabled=not (KEYS.get("OPENAI_API_KEY") and bad_cuts),
                      type="primary" if bad_cuts else "secondary"):
             with st.status(f"불합격 {len(bad_cuts)}컷을 고쳐 다시 만드는 중… (컷당 최대 {1 + QC_RETRY}회)") as s:
-                make([(c, qc.fix_prompt(rec[c["id"]].get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c), set(set_loc(work))),
+                make([(c, qc.fix_prompt(rec[c["id"]].get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c), set(set_loc(work)), prop_texts(work)),
                                         rec[c["id"]]["qc"]), refs_for(c)) for c in bad_cuts])
                 finish()
                 s.update(label="다시 만들기 완료", state="complete")
@@ -1517,7 +1528,7 @@ elif cur == "still":
                 save(work)
                 cuts, rec, picked = still_state(ep_no)
                 with st.status(f"EP {ep_no} 스틸 {len(cuts) * n_c}장 새로 생성{' · 자동 검수' if AUTO_QC else ''} 중… (4컷씩 동시)") as s_:
-                    make([(c, cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c), set(set_loc(work))), refs_for(c)) for c in cuts])
+                    make([(c, cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c), set(set_loc(work)), prop_texts(work)), refs_for(c)) for c in cuts])
                     finish()
                     s_.update(label="생성 완료", state="complete")
                 st.rerun()
@@ -1573,7 +1584,7 @@ elif cur == "still":
                             finish()
                             st.rerun()
             with st.expander("지시문 · 다시 만들기"):
-                base_p = cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs], propdesc, look_text(work, c), set(set_loc(work)))
+                base_p = cell.get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs], propdesc, look_text(work, c), set(set_loc(work)), prop_texts(work))
                 if cell.get("prompt") and st.button("지시문 새로 쓰기 (지금 규칙·소품·기준 그림으로)", key=f"snew_{c['id']}",
                                                     help="예전 규칙으로 만든 지시문을 버리고 새로 조립합니다. 그다음 '이 컷 다시'를 누르세요."):
                     cell.pop("prompt", None)

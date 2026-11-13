@@ -25,6 +25,7 @@ SKIN = ("Real skin texture with fine visible pores and a healthy natural glow, n
 NEG = (" No beauty filter, no airbrushing, no plastic skin, no waxy skin, no CGI look, no 3D render look, "
        "no HDR, no oversharpening, no exaggerated features. "
        "No text, no letters, no logo, no watermark anywhere in the image.")
+TEXT_OK = "The only writing in the image is"       # 이 문구가 지시문에 있으면 '글자 없음' 규칙을 그 글자에 한해 푼다
 # 연속성 금지 소품 (2026-11-12 Mr. MOON 결정): 컷마다 나왔다 안 나왔다 하는 작은 소품은 처음부터 뺀다.
 # 이야기에 필요한 소품(방문증 등)은 그 컷에서 손에만 들고, 몸에 걸거나 착용하지 않는다.
 NO_WEAR = (" Nothing hangs around the neck: no lanyard, no ID badge, no name tag, no access card on the body. "
@@ -105,6 +106,9 @@ def generate(key: str, prompt: str, aspect: str = "9:16", quality: str = "medium
     """그림 한 장 → JPG 바이트. style: ref(인물 기준) / location(장소 마스터) / cut(스틸 컷)."""
     from PIL import Image
     head, tail = STYLES.get(style, STYLES["cut"])
+    if TEXT_OK in prompt:                              # 글자가 인쇄된 소품(임시출입증 등)이 있는 컷: 그 글자만 허용
+        tail = tail.replace("No text, no letters, no logo, no watermark anywhere in the image.",
+                            "No logo, no watermark, and no writing other than the printed text named above.")
     full = (head + prompt + tail) if photo else prompt
     body = {"model": MODEL, "prompt": full[:30000], "size": SIZES.get(aspect, SIZES["9:16"]),
             "quality": quality or "medium", "n": 1}
@@ -151,6 +155,9 @@ def edit(key: str, prompt: str, refs: list[tuple[str, bytes]], aspect: str = "9:
         return generate(key, prompt, aspect, quality, style=style)
     from openai import OpenAI
     head, tail = STYLES.get(style, STYLES["cut"])
+    if TEXT_OK in prompt:                              # 글자가 인쇄된 소품(임시출입증 등)이 있는 컷: 그 글자만 허용
+        tail = tail.replace("No text, no letters, no logo, no watermark anywhere in the image.",
+                            "No logo, no watermark, and no writing other than the printed text named above.")
     client = OpenAI(api_key=key, base_url=base_url, max_retries=2, timeout=300)
     files = [(name, _to_jpg(data), "image/jpeg") for name, data in refs[:MAX_REFS]]
     r = client.images.edit(model=model or MODEL, image=files, prompt=(head + prompt + tail)[:30000],

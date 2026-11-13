@@ -69,6 +69,8 @@ STILL_SYSTEM = """당신은 한국 실사 드라마 숏폼의 스크립터(연�
 - '엠블럼' 이름표가 붙은 기준 그림은 벽에 걸린 회사 엠블럼의 정확한 모양입니다. 컷 그림에 엠블럼이 보이는데 모양이 다르거나,
   엠블럼이 둘 이상이거나, 옆에 글자가 있으면 set 불합격입니다. 엠블럼이 화면에 안 보이는 것은 합격입니다.
 - '소품:' 이름표가 붙은 기준 그림은 그 소품의 생김새입니다. 컷 그림 속 소품이 다른 종류의 물건이면 prop 불합격입니다. 소품이 없는 컷은 prop 합격.
+- 생성 지시문에 "The only writing in the image is the printed text …" 가 있으면 그 글자가 소품에 인쇄된 것은 합격입니다.
+  그 글자가 틀리게 쓰였거나(다른 글자, 깨진 한글) 그 밖의 글자가 있으면 text 불합격입니다. 소품이 작아 글자를 읽을 수 없는 크기면 합격입니다.
 - 글자는 엄격하게 봅니다. 벽 로고 옆에 회사 이름 같은 글자가 한 줄이라도 있으면 text 불합격이고,
   fix_en 은 "The wall shows only the abstract emblem from the location reference, with no lettering anywhere." 처럼 씁니다.
 
