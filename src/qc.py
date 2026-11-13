@@ -72,6 +72,8 @@ STILL_SYSTEM = """당신은 한국 실사 드라마 숏폼의 스크립터(연�
 - '소품:' 이름표가 붙은 기준 그림은 그 소품의 생김새입니다. 컷 그림 속 소품이 다른 종류의 물건이면 prop 불합격입니다. 소품이 없는 컷은 prop 합격.
 - 생성 지시문에 "The only writing in the image is the printed text …" 가 있으면 그 글자가 소품에 인쇄된 것은 합격입니다.
   그 글자가 틀리게 쓰였거나(다른 글자, 깨진 한글) 그 밖의 글자가 있으면 text 불합격입니다. 소품이 작아 글자를 읽을 수 없는 크기면 합격입니다.
+- 휴대폰·모니터 화면은 꺼진 검은 화면이어야 합니다. 화면에 글자·한자·깨진 글자·아이콘·통화 화면·사람 얼굴이 보이면 text 불합격이고,
+  fix_en 은 "The phone screen is switched off: plain black glass with no characters, no icons and no interface." 처럼 씁니다.
 - 글자는 엄격하게 봅니다. 벽 로고 옆에 회사 이름 같은 글자가 한 줄이라도 있으면 text 불합격이고,
   fix_en 은 "The wall shows only the abstract emblem from the location reference, with no lettering anywhere." 처럼 씁니다.
 

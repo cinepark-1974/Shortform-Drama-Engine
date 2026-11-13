@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v0.9.1"
+VERSION = "v0.9.2"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -1345,7 +1345,7 @@ elif cur == "still":
         return out
 
     def still_state(n):
-        cuts = cutter.fill_props(allcuts[str(n)]["cuts"], propdesc, set_loc(work))
+        cuts = cutter.fix_screens(cutter.fill_props(allcuts[str(n)]["cuts"], propdesc, set_loc(work)))
         rec = stills.setdefault(str(n), {})
         picked = sum(1 for c in cuts if rec.get(c["id"], {}).get("pick"))
         return cuts, rec, picked
@@ -1637,7 +1637,7 @@ elif cur == "clip":
     with c2:
         mode = st.selectbox("화질", ["pro", "standard"], format_func=lambda m: {"standard": "720p (시험용)", "pro": "1080p (기본 · 4K 업스케일 대비)"}[m],
                             help="720p로 시험한 테이크를 1080p로 다시 만들면 다른 움직임이 나옵니다. 본편은 처음부터 1080p로 만듭니다.")
-    cuts = allcuts[str(ep_no)]["cuts"]
+    cuts = cutter.fix_screens(allcuts[str(ep_no)]["cuts"])   # 화면 글자 컷은 정지 컷 (영상을 만들지 않음)
     rec = clips.setdefault(str(ep_no), {})
     srec = stills.get(str(ep_no), {})
     moving = [c for c in cuts if c["motion"] in ("move", "video")]

@@ -75,6 +75,9 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 - 몸에 거는 작은 소품(사원증·출입증·방문증 목걸이, 명찰, 장신구, 시계, 이어폰)은 쓰지 않음.
   대본에 소품이 필요하면 그 컷에서 손에 들고 있게 쓰거나 INSERT 컷으로 보여 줌. '목에 건' 같은 표현 금지.
 - 휴대폰·모니터 화면은 화면이 카메라를 향하게만 쓰고, 화면 글자는 screen_text 에만 적음.
+  frame·motion 에 화면 내용(알림, 발신자 이름, 메시지, 태그, 메일)을 쓰지 않음. frame 에는 "화면이 카메라를 향한 휴대폰을 쥔 손"처럼 물건과 손만 씀.
+  그림·영상 AI는 화면 글자를 한자나 깨진 글자로 그림. 화면은 빈 화면으로 찍고 글자·켜짐·꺼짐은 편집에서 얹음.
+  얼굴 없이 화면만 보여 주는 컷(휴대폰·모니터 INSERT)은 motion "still", motion_ko 는 "카메라만 움직인다". 마지막 컷이 이런 컷이어도 "still".
 - 얼굴 컷(ECU·CU·MCU)에는 얼굴과 어깨만 넣음. 손·가방·벽의 엠블럼을 같은 frame 에 쓰지 않음 (한 장에 다 넣으면 구도가 깨짐).
   인물이 무언가를 올려다보거나 바라보는 컷은 "화면 밖 위쪽을 본다"로 쓰고, 보는 대상(엠블럼, 모니터, 사람)은 다음 컷에서 따로 보여 줌.
   얼굴 컷의 props 는 비움.
@@ -417,6 +420,20 @@ def normalize(cuts: list, ep: dict, bible: dict | None = None) -> list:
     return fit_durations(cap_video(unify_looks(out)))
 
 
+def is_screen_cut(c: dict) -> bool:
+    """화면 글자 컷: 휴대폰·모니터·문서의 글자를 보여 주는 컷이고 얼굴이 화면에 없는 컷.
+    그림·영상 AI는 화면 글자를 한자나 깨진 글자로 그리므로, 빈 화면의 정지 컷으로 만들고 글자와 화면 변화는 편집에서 얹는다."""
+    return bool(c.get("screen_text")) and all(":" in ch for ch in c.get("chars", []))
+
+
+def fix_screens(cuts: list) -> list:
+    """화면 글자 컷은 정지+카메라로 고정한다 (마지막 컷·클라이맥스여도). 예전 콘티에도 적용."""
+    for c in cuts:
+        if is_screen_cut(c):
+            c["motion"] = "still"
+    return cuts
+
+
 def cap_video(cuts: list, limit: int = MAX_VIDEO, moving: int = MAX_MOVING) -> list:
     """움직임 규칙을 코드로 강제한다.
     - 마지막 컷·클라이맥스는 완전 영상. 클라이맥스(버티기 컷)는 화당 1개만 남김(가장 긴 컷).
@@ -441,6 +458,7 @@ def cap_video(cuts: list, limit: int = MAX_VIDEO, moving: int = MAX_MOVING) -> l
     if len(vids) > limit:
         for c in sorted((c for c in vids if not locked(c)), key=lambda c: -c["dur"])[: len(vids) - limit]:
             c["motion"] = "move"
+    fix_screens(cuts)
     mov = [c for c in cuts if c["motion"] in ("move", "video")]
     if len(mov) > moving:
         spare = sorted((c for c in mov if not locked(c)), key=lambda c: (c["motion"] == "video", c["dur"]))
@@ -472,14 +490,14 @@ def check(cuts: list, known_chars: set, known_locs: set, scenes: list | None = N
         issues.append({"id": "-", "level": "todo", "msg": f"영상 생성 컷 {nm}개 (상한 {MAX_MOVING}개, 컷마다 최소 3초 과금)"})
     if sum(1 for c in cuts if c["climax"]) > 1:
         issues.append({"id": "-", "level": "todo", "msg": "버티기 컷(클라이맥스)이 2개 이상"})
-    if cuts[-1]["motion"] != "video":
+    if cuts[-1]["motion"] != "video" and not is_screen_cut(cuts[-1]):
         issues.append({"id": cuts[-1]["id"], "level": "fix", "msg": "마지막 '끊김' 컷은 완전 영상이어야 함"})
     run = 0
     for c in cuts:
         run = run + 1 if (c["motion"] == "still" and c["dur"] > 3.0) else 0
         if run > 2:
             issues.append({"id": c["id"], "level": "fix", "msg": "3초 넘는 정지 컷이 3개 연속 (PPT식으로 보임)"})
-        if c["climax"] and c["motion"] != "video":
+        if c["climax"] and c["motion"] != "video" and not is_screen_cut(c):
             issues.append({"id": c["id"], "level": "fix", "msg": "클라이맥스 컷은 완전 영상이어야 함"})
         if not c["climax"] and c["dur"] > DUR_MAX + 0.05 and not c.get("dialogue"):
             issues.append({"id": c["id"], "level": "todo", "msg": f"{c['dur']}초: 4초 넘는 보통 컷 (둘로 나누면 호흡이 빨라짐)"})
@@ -511,6 +529,22 @@ def check(cuts: list, known_chars: set, known_locs: set, scenes: list | None = N
         for b in banned_in(" ".join([c["action"], c.get("frame_ko", ""), c.get("frame_en", ""), c.get("motion_en", "")])):
             issues.append({"id": c["id"], "level": "fix", "msg": f"행동 문장 금지어 {b}"})
     return issues
+
+
+BLANK_SCREEN = ("Every phone screen and every monitor screen in frame is switched off: a plain black glass surface with no characters, "
+                "no icons, no numbers, no interface and no reflection of a face. Every paper is blank white. "
+                "Screen content is added in editing. No text anywhere in the image.")
+SCREEN_CLAUSE = re.compile(r",?\s*\b(displaying|showing|shows|displays|reading|reads|lit up with)\b[^.;]*?\b(notification|caller|message|text|"
+                           r"incoming call|call screen|name|tag|email|e-mail|chat|alert|pop-up|popup|interface|words?)\b[^.;,]*", re.I)
+
+
+def scene_text(c: dict) -> str:
+    """첫 장면 영어 문장을 지시문에 넣기 전에 정리: 로고 → 벽 엠블럼, 화면 글자 컷은 화면 내용 묘사를 지움."""
+    t = re.sub(r"(?i)\b(CI |company |corporate |brand )?logo\b", "wall emblem", c.get("frame_en") or c.get("action_en") or c["action"])
+    if c.get("screen_text"):
+        t = SCREEN_CLAUSE.sub("", t).strip()
+        t = t if t.endswith(".") else t + "."
+    return t
 
 
 LOGO_WORDS = re.compile(r"로고|CI\b|간판|logo|signage", re.I)
@@ -586,8 +620,7 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None,
         (slist if n in (set_props or set()) else plist).append(
             f"{d}, the same object as reference image {pos['소품:' + n]}" if "소품:" + n in pos else d)
     lines = [f"Vertical 9:16 still frame from a Korean drama. {SHOT_EN.get(c['size'], 'medium shot').capitalize()}, {ANG_EN.get(c['angle'], 'eye level')}.",
-             "Scene, one frozen moment: " + re.sub(r"(?i)\b(CI |company |corporate |brand )?logo\b", "wall emblem",
-                                                    c.get("frame_en") or c.get("action_en") or c["action"]),
+             "Scene, one frozen moment: " + scene_text(c),
              ("Characters: " + "; ".join(who) + ".") if who else "No people in frame.",
              f"Location: {place}" + (", background softly blurred." if tight else "."),
              ("Reference images are identity and set references only: keep faces, hair, clothing and the room exactly, "
@@ -598,7 +631,7 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None,
              "Any prop named in the scene is held in the hands only, never worn.",
              (f"The only writing in the image is the printed text " + " and ".join(f'"{t}"' for t in texts) + " on the prop; "
               "every screen, sign and paper is blank.") if texts else
-             ("Any screen or paper in frame is blank; text is added in editing." if c["screen_text"] else "No text anywhere in the image.")]
+             (BLANK_SCREEN if c["screen_text"] else "No text anywhere in the image.")]
     return " ".join(x for x in lines if x)
 
 
@@ -616,8 +649,12 @@ def video_prompt(c: dict, cast: dict) -> str:
     parts = [f"Shot: {SHOT_EN.get(c['size'], 'medium shot')}, {ANG_EN.get(c['angle'], 'eye level')}, vertical 9:16.",
              f"Camera: {CAM_EN.get(c['camera'], CAM_EN['고정'])}",
              ("Characters: " + "; ".join(who) + ".") if who else "",
-             f"First frame: {c.get('frame_en') or c.get('action_en') or c['action']}",
-             f"Motion from the first frame: {c.get('motion_en') or c.get('action_en') or c['action']}", mv, dl,
+             f"First frame: {scene_text(c)}",
+             ("Motion from the first frame: the hand holds the object steady with a tiny natural tremor; nothing on any screen changes."
+              if c.get("screen_text") else
+              f"Motion from the first frame: {c.get('motion_en') or c.get('action_en') or c['action']}"), mv, dl,
+             ("Every phone screen and monitor screen stays a plain black glass surface for the whole clip; no characters, no icons, "
+              "no interface and no light appear on it.") if c.get("screen_text") else "",
              "Keep the face, hair and clothing of the first frame unchanged for the whole clip; no new people enter the frame.",
              f"Duration: {clip_seconds(c['dur'])} seconds. Photoreal, natural light, no text on screen."]
     return " ".join(x for x in parts if x)
