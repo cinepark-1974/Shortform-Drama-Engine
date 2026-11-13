@@ -313,7 +313,24 @@ def view_for(ch: str, c: dict) -> str:
     return "front"
 
 
+def refresh_cut_status(work: dict | None):
+    """콘티 점검 결과(완료/고칠 화)를 지금 규칙으로 다시 계산한다. 규칙이 바뀐 뒤에도 예전 판정이 남지 않게."""
+    if not work or not work.get("cuts") or not work.get("bible"):
+        return
+    b = work["bible"]
+    kc, kl = {c["name"] for c in b.get("characters", [])}, {l["id"] for l in b.get("locations", [])}
+    eps = work.get("parsed", {}).get("episodes", [])
+    for k, rec in work["cuts"].items():
+        try:
+            scenes = [s_["no"] for s_ in eps[int(k) - 1]["scenes"]]
+            iss = cutter.check(cutter.fix_screens(rec["cuts"]), kc, kl, scenes)
+        except Exception:
+            continue
+        work.setdefault("eps", {}).setdefault(k, {})["cut"] = "fix" if any(i["level"] == "fix" for i in iss) else "done"
+
+
 def stage_counts(work: dict | None) -> dict:
+    refresh_cut_status(work)
     out = {k: (0, 0) for k, *_ in STAGES}
     if not work:
         return out

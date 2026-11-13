@@ -124,6 +124,14 @@ def _ask(api_key: str, system: str, content: list, model: str = "", base_url: st
     return data if isinstance(data, dict) else {}
 
 
+def clean_fix(t: str) -> str:
+    """검수가 쓴 고치는 문장에서 지시문 금지어를 뺀다 (금지어가 있으면 그 컷을 다시 만들 수 없게 막히므로)."""
+    import re
+    t = re.sub(r"\s+or\s+", " and ", t.strip())
+    t = re.sub(r"(?i)\b(slightly|maybe|somewhat|a bit|perhaps|approximately|about)\s+", "", t)
+    return t
+
+
 def _result(data: dict, keys: dict) -> dict:
     """응답 형식을 그대로 믿지 않는다: 항목은 정해진 이름만, 불합격 항목엔 이유가 있게."""
     items = data.get("items") if isinstance(data.get("items"), dict) else {}
@@ -133,7 +141,7 @@ def _result(data: dict, keys: dict) -> dict:
         if isinstance(f, dict) and f.get("item") in keys:
             items[f["item"]] = False
             fails.append({"item": f["item"], "reason": str(f.get("reason", "")).strip(),
-                          "fix_en": str(f.get("fix_en", "")).strip()})
+                          "fix_en": clean_fix(str(f.get("fix_en", "")))})
     for k, ok in items.items():                     # items 에선 불합격인데 fails 에 이유가 없을 때
         if not ok and k not in {f["item"] for f in fails}:
             fails.append({"item": k, "reason": keys[k] + " (불합격)", "fix_en": ""})
