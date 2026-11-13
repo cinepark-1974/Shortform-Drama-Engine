@@ -16,10 +16,10 @@ from pathlib import Path
 import streamlit as st
 
 from src import videogen, bible as bb
-from src import cutter, dubbing, imagegen, profiles, qc, script_parser
+from src import cutter, dubbing, editor, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.0"
+VERSION = "v1.1"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -107,6 +107,9 @@ STAGES = [
     ("master", "09", "마스터", "확인 · 업로드"),
 ]
 HOW = {
+    "sub": "한국어 자막은 콘티의 대사 그대로, 영어 자막은 Claude 가 구어체로 옮깁니다. 자막 시각은 편집에서 더빙에 맞춰 자동으로 잡힙니다.",
+    "edit": "컷(영상·스틸)과 더빙, 자막을 세로 9:16 한 화로 이어 붙입니다. 컷 길이는 더빙에 맞춰 늘리고, 정지 컷에는 카메라 움직임을 넣고, 화면 글자는 한글로 얹습니다.",
+    "master": "완성본을 처음부터 끝까지 한 번 보고 확정합니다. 사람이 확인하는 두 번째 지점입니다.",
     "dub": "콘티의 대사를 인물별 고정 목소리로 만듭니다 (ElevenLabs). 만든 음성을 다시 글자로 받아 적어 대본과 비교하고, 다르게 읽힌 줄은 2회까지 다시 만듭니다. 음성이 컷보다 길면 편집에서 컷을 늘립니다.",
     "clip": "확정한 스틸을 첫 프레임으로 넣어 짧은 영상을 만듭니다 (Replicate · Kling). 테이크마다 첫·중간·마지막 장면을 Claude 가 검수하고, 불합격이면 고쳐서 2회까지 다시 만듭니다. 그래도 불합격이면 그 컷은 정지+카메라로 바꿉니다. 소리는 06·07 단계에서 얹습니다.",
     "still": "컷마다 장면 그림을 만듭니다. 인물 확정 그림과 장소 마스터를 기준 그림으로 넣고, 만든 직후 Claude 가 자동 검수합니다(지시문 대상·동작·몸에 거는 소품·같은 얼굴·글자·손). 불합격이면 이유를 지시문에 붙여 2회까지 다시 만들고, 그래도 불합격인 컷만 빨간 표시가 남습니다.",
@@ -2056,10 +2059,179 @@ elif cur == "dub":
         st.session_state["dub_ep_next"] = nxt_d[0]
         st.rerun()
 
-# ===== 07 이후 =====
+# ===== 07 자막 · 08 편집 · 09 마스터 =====
 else:
-    brief(cur, "다음 버전")
-    st.info("지금 버전은 대본 · 캐스팅 · 콘티 · 콘티 그림 · 영상 · 더빙까지입니다. 다음: 07 자막·사운드 → 08 편집 → 09 마스터.")
+    allcuts = work.get("cuts", {})
+    eps_state = work.setdefault("eps", {})
+    subs_all = work.setdefault("captions", {})      # (work["subs"] 는 채널 자막 언어 목록이라 다른 이름을 씀)
+    finals = work.setdefault("finals", {})
+    n_ep = len(parsed["episodes"])
+    brief(cur, f"{dict((k, t) for k, _, t, _ in STAGES)[cur]} 완료 {sum(1 for v in eps_state.values() if v.get(cur) == 'done')} / {n_ep}화")
+    ready = [e["ep"] for e in parsed["episodes"] if str(e["ep"]) in allcuts]
+    if not ready:
+        st.info("03 콘티를 만든 화가 있어야 합니다.")
+        st.stop()
+    todo_x = [n for n in ready if eps_state.get(str(n), {}).get(cur) != "done"]
+    x1, x2 = st.columns([1, 3])
+    with x1:
+        ep_no = st.selectbox("화", ready, index=ready.index(todo_x[0]) if todo_x else 0, key=f"{cur}_ep",
+                             format_func=lambda n: f"EP {n}" + (" ✓" if eps_state.get(str(n), {}).get(cur) == "done" else ""))
+    k = str(ep_no)
+    ep = parsed["episodes"][ep_no - 1]
+    cuts = cutter.fix_screens(allcuts[k]["cuts"])
+    srec, crec, drec = work.get("stills", {}).get(k, {}), work.get("clips", {}).get(k, {}), work.get("dubs", {}).get(k, {})
+    sub = subs_all.setdefault(k, {})
+    lines = [c for c in cuts if c.get("dialogue") and c["dialogue"].get("text", "").strip()]
+    hook = (ep.get("hook") or "").strip()
+
+    def subs_stale() -> bool:
+        return any(sub.get("ko", {}).get(c["id"]) != c["dialogue"]["text"] for c in lines) or sub.get("hook_ko") != hook
+
+    def make_subs():
+        r = editor.translate(KEYS["ANTHROPIC_API_KEY"], hook, [{"id": c["id"], "who": c["dialogue"]["who"], "ko": c["dialogue"]["text"]} for c in lines], MODEL)
+        sub.update({"hook_ko": hook, "hook_en": r["hook"], "ko": {c["id"]: c["dialogue"]["text"] for c in lines}, "lines": r["lines"]})
+        eps_state.setdefault(k, {})["sub"] = "done"
+        save(work)
+
+    def edit_sig() -> str:
+        """편집에 들어간 재료의 지문. 재료(스틸·영상·더빙·자막·컷 길이)가 바뀌면 달라진다 → 다시 렌더링할 화로 표시."""
+        import hashlib
+        parts = [json.dumps([[c["id"], c["dur"], c["motion"], c.get("camera"), c.get("screen_text"), (c.get("dialogue") or {}).get("text")] for c in cuts], ensure_ascii=False),
+                 json.dumps({c["id"]: [srec.get(c["id"], {}).get("pick"), crec.get(c["id"], {}).get("key"), drec.get(c["id"], {}).get("key")] for c in cuts}),
+                 json.dumps(sub.get("lines", {}), ensure_ascii=False, sort_keys=True), hook, str(work.get("edit_en", True))]
+        return hashlib.md5("|".join(parts).encode()).hexdigest()[:12]
+
+    fin = finals.get(k, {})
+    stale_f = bool(fin.get("key")) and fin.get("sig") != edit_sig()
+    if stale_f and eps_state.get(k, {}).get("edit") == "done":
+        eps_state[k]["edit"] = "doing"
+        eps_state[k].pop("master", None)
+        save(work)
+
+    # ── 07 자막 ──
+    if cur == "sub":
+        with x2:
+            st.write("")
+            need = not sub.get("lines") or subs_stale()
+            if st.button(f"EP {ep_no} 영어 자막 만들기" if need else f"EP {ep_no} 자막 완료 · {len(lines)}줄", type="primary",
+                         disabled=not (KEYS.get("ANTHROPIC_API_KEY") and need)):
+                with st.spinner("영어 자막을 쓰는 중… (10~20초)"):
+                    make_subs()
+                st.rerun()
+        st.caption("한국어 자막은 콘티의 대사 그대로입니다. 영어 자막은 Claude 가 구어체로 옮깁니다. 자막 시각은 08 편집에서 더빙 길이에 맞춰 자동으로 잡힙니다. "
+                   "효과음·배경 음악은 아직 넣지 않습니다 (다음 버전).")
+        if subs_stale() and sub.get("lines"):
+            st.markdown("<span class='tag fix'>대사가 바뀜</span> <span class='small'>콘티의 대사가 자막을 만든 뒤에 바뀌었습니다. 다시 만들면 됩니다.</span>", unsafe_allow_html=True)
+        st.markdown(f"<div class='cut'><div class='h'>첫머리 훅 자막</div><div class='a'>{hook}</div><div class='s'>{sub.get('hook_en', '')}</div></div>", unsafe_allow_html=True)
+        for c in lines:
+            en0 = sub.get("lines", {}).get(c["id"], "")
+            s1, s2 = st.columns(2)
+            with s1:
+                st.markdown(f"<div class='cut'><div class='h'>{c['id']} · {c['dialogue']['who']}</div><div class='a'>{c['dialogue']['text']}</div></div>", unsafe_allow_html=True)
+            with s2:
+                # 키에 현재 글을 넣는다: 자막을 새로 만들면 입력칸이 예전 값(빈칸)으로 덮어쓰지 않게
+                en1 = st.text_input("영어", en0, key=f"en_{k}_{c['id']}_{abs(hash(en0)) % 100000}", label_visibility="collapsed")
+                if en1 != en0 and sub.get("lines") is not None:
+                    sub.setdefault("lines", {})[c["id"]] = en1
+                    save(work)
+
+    # ── 08 편집 ──
+    elif cur == "edit":
+        miss_s = [c["id"] for c in cuts if not srec.get(c["id"], {}).get("pick")]
+        miss_d = [c["id"] for c in lines if not drec.get(c["id"], {}).get("key")]
+        with x2:
+            o1, o2 = st.columns([1, 2])
+            with o1:
+                en_on = st.checkbox("영어 자막 넣기", value=bool(work.get("edit_en", True)))
+                if en_on != work.get("edit_en", True):
+                    work["edit_en"] = en_on
+                    save(work)
+                    st.rerun()
+            with o2:
+                st.write("")
+                has = bool(fin.get("key")) and not stale_f
+                if st.button(f"EP {ep_no} 편집 완료 · 다시 렌더링" if has else f"EP {ep_no} 편집 · 렌더링 ({len(cuts)}컷)", type="secondary" if has else "primary",
+                             disabled=bool(miss_s)):
+                    with st.status(f"EP {ep_no} 렌더링 중… ({len(cuts)}컷, 2~5분)") as s_:
+                        if en_on and (not sub.get("lines") or subs_stale()) and KEYS.get("ANTHROPIC_API_KEY") and lines:
+                            s_.update(label="영어 자막을 쓰는 중…")
+                            make_subs()
+                        boxes = work.setdefault("screen_box", {}).setdefault(k, {})
+
+                        def screen_box(c, still):
+                            pick = srec[c["id"]]["pick"]
+                            if boxes.get(c["id"], {}).get("pick") != pick:      # 스틸이 바뀌면 화면 위치를 다시 찾는다
+                                b = editor.find_screen(KEYS["ANTHROPIC_API_KEY"], still, MODEL) if KEYS.get("ANTHROPIC_API_KEY") else None
+                                boxes[c["id"]] = {"pick": pick, "box": list(b) if b else None}
+                            b = boxes[c["id"]]["box"]
+                            return tuple(b) if b else None
+                        try:
+                            mp4, tl = editor.render_episode(cuts, img_bytes, srec, crec, drec, sub, hook=hook, english=en_on, screen_box=screen_box,
+                                                            on_step=lambda i, n, cid: s_.update(label=f"컷 {i + 1}/{n} ({cid}) 렌더링 중…"))
+                        except Exception as ex:
+                            st.error(f"렌더링 실패: {ex}")
+                            st.stop()
+                        fk = f"works/{work['id']}/final/ep{ep_no:03d}_{uuid.uuid4().hex[:6]}.mp4"
+                        store.put_bytes(fk, mp4, "video/mp4")
+                        finals[k] = {"key": fk, "sig": edit_sig(), "sec": round(tl[-1]["start"] + tl[-1]["dur"], 1), "mb": round(len(mp4) / 1e6, 1),
+                                     "at": now(), "takes": (fin.get("takes") or []) + [fk]}
+                        eps_state.setdefault(k, {})["edit"] = "done"
+                        eps_state[k]["sub"] = "done"            # 영어 자막 없이 렌더링해도 자막 단계는 끝난 것으로 본다
+                        eps_state[k].pop("master", None)
+                        save(work)
+                        s_.update(label="렌더링 완료", state="complete")
+                    st.rerun()
+        if miss_s:
+            st.markdown(f"<span class='tag fix'>스틸 없음</span> <span class='small'>{' · '.join(miss_s)} — 04 콘티 그림에서 먼저 만듭니다.</span>", unsafe_allow_html=True)
+        if miss_d:
+            st.markdown(f"<span class='tag todo'>더빙 없는 대사 {len(miss_d)}줄</span> <span class='small'>{' · '.join(miss_d)} — 이대로 렌더링하면 그 줄은 자막만 나옵니다.</span>", unsafe_allow_html=True)
+        if stale_f:
+            st.markdown("<span class='tag fix'>재료가 바뀜</span> <span class='small'>편집한 뒤에 스틸·영상·더빙·자막이 바뀌었습니다. 다시 렌더링하면 반영됩니다.</span>", unsafe_allow_html=True)
+        st.caption("컷 길이는 더빙 길이에 맞춰 자동으로 늘립니다. 영상 컷은 잘라 쓰고, 정지 컷은 스틸에 카메라 움직임을 넣습니다. "
+                   "화면 글자(휴대폰·모니터)는 화면 위치를 찾아 한글로 얹습니다. 세로 1080×1920, 30fps.")
+        tl = editor.timeline(cuts, drec)
+        if fin.get("key"):
+            v1, v2 = st.columns([1, 2])
+            with v1:
+                v = img_bytes(fin["key"])
+                if v:
+                    st.video(v)
+            with v2:
+                st.markdown(f"**EP {ep_no} 완성본** · {fin.get('sec')}초 · {fin.get('mb')}MB · {fin.get('at', '')}", unsafe_allow_html=True)
+                for c, seg in zip(cuts, tl):
+                    cell = crec.get(c["id"]) or {}
+                    kind = "영상" if c["motion"] != "still" and cell.get("key") and not (cell.get("fallback") and not cell.get("qc_ok")) else "정지+카메라"
+                    st.markdown(f"<div class='small'>{seg['start']:>5.1f}s · {c['id']} · {seg['dur']}s · {kind}"
+                                + (f" · {c['dialogue']['who']}: {c['dialogue']['text'][:24]}" if c.get("dialogue") else "")
+                                + (f" · 화면 글자: {c['screen_text'][:16]}" if c.get("screen_text") else "") + "</div>", unsafe_allow_html=True)
+        else:
+            st.markdown(f"<div class='small'>예상 길이 {tl[-1]['start'] + tl[-1]['dur']:.0f}초 · {len(cuts)}컷 "
+                        f"(영상 {sum(1 for c in cuts if c['motion'] != 'still')} · 정지 {sum(1 for c in cuts if c['motion'] == 'still')})</div>", unsafe_allow_html=True)
+
+    # ── 09 마스터 ──
+    else:
+        if not fin.get("key") or stale_f:
+            st.info("08 편집에서 이 화를 렌더링하면 여기에서 완성본을 확인합니다.")
+        else:
+            m1, m2 = st.columns([1, 2])
+            with m1:
+                v = img_bytes(fin["key"])
+                if v:
+                    st.video(v)
+            with m2:
+                done = eps_state.get(k, {}).get("master") == "done"
+                st.markdown(f"**EP {ep_no} 완성본** · {fin.get('sec')}초 · {fin.get('mb')}MB", unsafe_allow_html=True)
+                st.markdown("<div class='small'>사람이 확인하는 두 번째 지점입니다. 처음부터 끝까지 한 번 보고, 괜찮으면 확정합니다. "
+                            "고칠 컷이 있으면 04·05·06 에서 그 컷만 다시 만든 뒤 08 에서 다시 렌더링합니다.</div>", unsafe_allow_html=True)
+                if v:
+                    st.download_button("완성본 내려받기 (mp4)", v, file_name=f"{work['title']}_EP{ep_no:03d}.mp4", mime="video/mp4")
+                if not done and st.button("확인 완료 · 이 화 마스터 확정", type="primary"):
+                    eps_state.setdefault(k, {})["master"] = "done"
+                    save(work)
+                    st.rerun()
+                if done:
+                    st.markdown("<span class='tag ok'>마스터 확정</span> <span class='small'>업로드할 때 '변경되거나 합성된 콘텐츠' 표시를 '예'로 체크합니다.</span>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='cut'><div class='h'>업로드 제목 초안</div><div class='a'>{hook} | {work['title']} EP{ep_no}</div></div>", unsafe_allow_html=True)
 
 # ───────── 화면 맨 아래: 다음 할 일 안내 ─────────
 st.divider()
