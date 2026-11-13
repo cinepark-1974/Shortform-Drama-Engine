@@ -77,6 +77,9 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 - 휴대폰·모니터 화면은 화면이 카메라를 향하게만 쓰고, 화면 글자는 screen_text 에만 적음.
 - 로고·간판·회사 이름은 그림 AI가 컷마다 다르게 그리므로 frame 에 쓰지 않음. 회사 로고가 보여야 하는 컷은 "벽의 엠블럼"이라고만 쓰고
   회사 이름·글자는 쓰지 않음 (엠블럼 모양은 장소 기준 그림이 정함).
+- 장소 시점: [장소 시점] 목록에 그 장소의 시점(카메라가 향하는 쪽)이 있으면 컷의 view 에 시점 이름 하나를 적음. 없으면 "".
+  같은 자리에서 같은 쪽을 보는 컷은 같은 시점. 한 장면에서 시점은 2개까지만 오감 (배경이 컷마다 바뀌면 다른 장소처럼 보임).
+  frame 에 배경 묘사(벽, 창, 게이트, 로고)를 따로 쓰지 않음. 시점 그림이 배경을 정함.
 - 분장·의상(Make-up & Costume): 인물의 머리·분장·옷은 [분장·의상] 목록의 '룩'이 정함. 컷의 looks 에 {"인물":"룩 이름"}을 적음.
   목록에 있는 이름만 그대로 쓰고, 적지 않으면 '기본'(확정 캐스팅 그림의 차림). 한 장면(S#) 안에서 한 인물의 룩은 하나.
   장소·시간에 맞는 룩을 고름(집 장면에 '집' 룩이 있으면 그것, 회사 장면은 그 시기의 출근 룩). frame 에는 옷·머리 묘사를 따로 쓰지 않음.
@@ -110,7 +113,7 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 JSON 만 출력:
 {"props":[{"name":"","desc_en":""}],"new_looks":[{"who":"","name":"","note_ko":"","desc_en":""}],
 "cuts":[{"no":1,"scene":1,"size":"","angle":"","camera":"","dur":1.5,"motion":"","climax":false,
-"chars":[],"looks":{},"props":[],"loc":"L01","action":"","frame_ko":"","frame_en":"","motion_ko":"","motion_en":"","dialogue":null,"screen_text":"","sfx":""}]}"""
+"chars":[],"looks":{},"props":[],"loc":"L01","view":"","action":"","frame_ko":"","frame_en":"","motion_ko":"","motion_en":"","dialogue":null,"screen_text":"","sfx":""}]}"""
 
 REVIEW = """당신은 한국 실사 숏폼 드라마의 콘티 감수자입니다. 감독이 짠 콘티(JSON)를 받아, 그림 생성 AI가 실패하지 않도록 고칩니다.
 
@@ -137,12 +140,14 @@ def syl(t: str) -> int:
     return len(re.findall(r"[가-힣]", re.sub(r"\([^)]*\)", "", t or "")))
 
 
-def episode_text(ep: dict, bible: dict | None, props: dict | None = None, looks: dict | None = None) -> str:
+def episode_text(ep: dict, bible: dict | None, props: dict | None = None, looks: dict | None = None, views: dict | None = None) -> str:
     from src import bible as bb
     names = [c["name"] for c in (bible or {}).get("characters", [])]
     plist = "; ".join(f"{n} = {d}" for n, d in (props or {}).items()) or "(아직 없음. 필요한 소품은 props 에 새로 등록)"
     out = [f"[인물 표기] {', '.join(names)}  (chars·dialogue.who 에는 이 이름만 그대로 씀. 목록에 없는 단역은 '신입A'처럼 짧게)",
            f"[소품 목록] {plist}",
+           "[장소 시점] " + ("; ".join(f"{lid}: " + ", ".join(f"{k}({v})" for k, v in vs.items())
+                                       for lid, vs in (views or {}).items() if vs) or "없음 (view 는 비워 둠)"),
            "[분장·의상] " + ("; ".join(f"{n}: 기본(확정 캐스팅 그림의 차림)" + "".join(f", {k}({v})" for k, v in lk.items())
                                         for n, lk in (looks or {}).items()) or "모든 인물 '기본' 하나"),
            f"EP {ep['ep']} | {ep['emotion']}", f"[훅 자막] {ep['hook']}"]
@@ -169,10 +174,10 @@ def _ask(api_key: str, system: str, text: str, model: str = "") -> dict:
 
 
 def split(api_key: str, ep: dict, bible: dict | None, model: str = "", review: bool = True, props: dict | None = None,
-          looks: dict | None = None) -> dict:
+          looks: dict | None = None, views: dict | None = None) -> dict:
     """looks = {인물: {룩 이름: 한 줄 설명}} (기본 룩 제외). 돌려주는 new_looks = 콘티가 새로 등록한 룩."""
     """콘티 만들기: ① 감독(컷 나누기) → ② 감수(첫 장면이 사진 한 장으로 찍히는지 점검·수정) → ③ 코드 규칙 정리."""
-    src = episode_text(ep, bible, props, looks)
+    src = episode_text(ep, bible, props, looks, views)
     first = _ask(api_key, SYSTEM, src, model)
     cuts = first.get("cuts", [])
     new_props = [x for x in (first.get("props") or []) if isinstance(x, dict) and x.get("name")]
@@ -200,6 +205,8 @@ def split(api_key: str, ep: dict, bible: dict | None, model: str = "", review: b
     for c in out:
         c["props"] = [n for n in c["props"] if n in known]
         c["looks"] = {w: l for w, l in c["looks"].items() if l in ok_looks.get(w, set())}
+        if c["view"] not in (views or {}).get(c["loc"], {}):
+            c["view"] = ""
     used = {n for c in out for n in c["props"]}
     return {"cuts": out, "model": model or DEFAULT_MODEL, "changes": changes, "new_looks": new_looks,
             "props": {n: d for n, d in known.items() if n in used or n in (props or {})}}
@@ -233,13 +240,77 @@ def prop_key(name: str) -> str:
     return name.split("의 ", 1)[-1].strip()
 
 
-def fill_props(cuts: list, props: dict) -> list:
-    """props 칸이 빈 컷(예전 콘티)에, 첫 장면 문장에 소품 이름이 나오면 그 소품을 붙인다."""
+def fill_props(cuts: list, props: dict, set_loc: dict | None = None) -> list:
+    """① props 칸이 빈 컷(예전 콘티)에, 첫 장면 문장에 소품 이름이 나오면 그 소품을 붙인다 (긴 이름부터: '노트북 가방'이 '노트북'보다 먼저).
+    ② 장소에 놓인 소품(set_loc = {소품: 장소 id})은 그 장소의 컷 중 얼굴 클로즈업이 아닌 모든 컷에 붙인다."""
     for c in cuts:
         if not c.get("props"):
             text = c.get("frame_ko", "") + " " + c.get("action", "")
-            c["props"] = [n for n in props if prop_key(n) and prop_key(n) in text]
+            got = []
+            for n in sorted(props, key=lambda x: -len(prop_key(x))):
+                k = prop_key(n)
+                if k and k in text:
+                    got.append(n)
+                    text = text.replace(k, "□")
+            c["props"] = got
+        for n, lid in (set_loc or {}).items():
+            if lid == c.get("loc") and c.get("size") not in ("ECU", "CU") and n not in c["props"]:
+                c["props"].append(n)
     return cuts
+
+
+BREAKDOWN = """당신은 한국 실사 숏폼 드라마의 조감독입니다. 한 화의 대본을 읽고 촬영 준비물 목록(브레이크다운)을 만듭니다.
+이 목록으로 기준 그림을 미리 만들어 두어야 컷마다 배경·소품·옷이 흔들리지 않습니다. 이미 등록된 것은 다시 적지 않습니다.
+
+1. views (장소 시점): 이 화에 나오는 장소마다, 카메라가 실제로 향하게 될 쪽. 장소당 1~3개.
+   인물이 서는 자리 뒤로 무엇이 보이는지가 기준. 예: 로비 → "게이트 쪽", "안내데스크 쪽". 회의실 → "세영 자리 쪽", "직원 자리 쪽".
+   loc(장소 id), name(짧은 한국어), note_ko(한 줄), desc_en(영어 확정형 한 문장: 카메라가 향하는 쪽과 화면에 들어오는 것. 사람 없음, 글자 없음).
+2. props (소품): 이 화에서 화면에 보이는 물건 가운데 두 컷 이상 나오거나 이야기에 중요한 것.
+   kind "hand" = 인물이 손에 드는 것(가방, 휴대폰, 서류, 방문증). name 은 주인을 붙임("세영의 노트북 가방").
+   kind "set" = 장소에 놓여 있는 것(회의실 전화기, 책상 위 노트북, 모니터). loc 에 장소 id. name 은 장소를 붙임("회의실 전화기").
+   desc_en: 종류·색·재질·크기·생김새를 영어 확정형 한 문장. 브랜드·로고·글자 없음. 화면 내용은 쓰지 않음(빈 화면).
+3. looks (분장·의상): 이 화에서 '기본' 차림(확정 캐스팅 그림)이 아닌 차림이 꼭 필요한 인물만. 집, 잠옷, 환자복, 상복, 몇 년 뒤.
+   who, name, note_ko, desc_en("Hair: …. Make-up: …. Clothing: …." 무늬 없는 단색, 장신구 없음). 회사 장면뿐인 화는 빈 목록.
+
+'or', 'slightly', 'maybe' 금지. 대본에 없는 것을 지어내지 않음.
+JSON 만 출력:
+{"views":[{"loc":"L01","name":"","note_ko":"","desc_en":""}],
+ "props":[{"name":"","kind":"hand","loc":"","note_ko":"","desc_en":""}],
+ "looks":[{"who":"","name":"","note_ko":"","desc_en":""}]}"""
+
+
+def breakdown(api_key: str, ep: dict, bible: dict | None, props: dict | None = None, looks: dict | None = None,
+              views: dict | None = None, model: str = "") -> dict:
+    """한 화의 준비물(장소 시점·소품·분장의상)을 대본에서 뽑는다. 이미 등록된 이름은 빼고 돌려준다."""
+    r = _ask(api_key, BREAKDOWN, episode_text(ep, bible, props, looks, views), model)
+    nm = name_map(bible)
+    locs = {l["id"] for l in (bible or {}).get("locations", [])}
+    out = {"views": [], "props": [], "looks": []}
+    for x in r.get("views") or []:
+        if isinstance(x, dict) and x.get("loc") in locs and x.get("name") and x.get("desc_en") \
+                and str(x["name"]).strip() not in (views or {}).get(x["loc"], {}):
+            out["views"].append({k: str(x.get(k, "")).strip() for k in ("loc", "name", "note_ko", "desc_en")})
+    for x in r.get("props") or []:
+        if isinstance(x, dict) and x.get("name") and x.get("desc_en") and str(x["name"]).strip() not in (props or {}):
+            kind = "set" if x.get("kind") == "set" and x.get("loc") in locs else "hand"
+            out["props"].append({"name": str(x["name"]).strip(), "kind": kind, "loc": x.get("loc", "") if kind == "set" else "",
+                                 "note_ko": str(x.get("note_ko", "")).strip(), "desc_en": str(x["desc_en"]).strip()})
+    for x in r.get("looks") or []:
+        if isinstance(x, dict) and x.get("who") and x.get("name") and x.get("desc_en"):
+            who, name = canon(str(x["who"]), nm), str(x["name"]).strip()
+            if name != "기본" and name not in (looks or {}).get(who, {}):
+                out["looks"].append({"who": who, "name": name, "note_ko": str(x.get("note_ko", "")).strip(), "desc_en": str(x["desc_en"]).strip()})
+    return out
+
+
+VIEW_SYSTEM = """한국 실사 드라마의 미술 담당입니다. 한 장소의 '시점'(카메라가 서서 바라보는 쪽) 하나를 영어 확정형 한 문장으로 씁니다.
+카메라가 어느 쪽을 향하고 화면에 무엇이 들어오는지 씁니다. 사람 없음. 글자·회사 이름 없음. 'or', 'slightly', 'maybe' 금지.
+예: "the camera faces the row of security gates with the glass entrance doors behind them, the reception desk out of frame"
+JSON 만 출력: {"desc_en": ""}"""
+
+
+def view_desc(api_key: str, loc_name: str, name: str, note: str = "", model: str = "") -> str:
+    return str(_ask(api_key, VIEW_SYSTEM, f"장소: {loc_name}\n시점 이름: {name}\n메모: {note or '없음'}", model).get("desc_en", "")).strip()
 
 
 def name_map(bible: dict | None) -> dict:
@@ -328,6 +399,7 @@ def normalize(cuts: list, ep: dict, bible: dict | None = None) -> list:
             "camera": str(c.get("camera", "고정")), "dur": dur,
             "motion": c.get("motion") if c.get("motion") in MOTIONS else "move",
             "climax": bool(c.get("climax", False)), "chars": [canon(str(x), nm) for x in (c.get("chars") or [])],
+            "view": str(c.get("view") or "").strip(),
             "props": [str(x).strip() for x in (c.get("props") or []) if str(x).strip()],
             "looks": {canon(str(k), nm): str(v).strip() for k, v in (c.get("looks") or {}).items()
                       if str(v).strip() and str(v).strip() != "기본"} if isinstance(c.get("looks"), dict) else {},
@@ -458,7 +530,7 @@ def shows_emblem(c: dict) -> bool:
 
 
 def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None, props: dict | None = None,
-                 look_text: dict | None = None) -> str:
+                 look_text: dict | None = None, set_props: set | None = None) -> str:
     """스틸(컷 그림) 지시문: 영어, 확정형. cast[name]=외모 영어 묘사, locs[id]=(이름, 영어 묘사).
     refs = 함께 넣는 기준 그림 순서 (인물 이름 또는 장소 id). 지시문에서 '기준 그림 몇 번'으로 짚어 준다."""
     refs = refs or []
@@ -487,15 +559,20 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None,
         place = (f"the same room as reference image {pos[c['loc']]}: same architecture, materials, furniture and light. "
                  "The camera shows only the part of the room this shot needs. Every wall emblem and every sign keeps exactly the shape, "
                  "color and position it has in that reference, with no letters added and no new logo invented")
+        if c["loc"] + "@전경" in pos:
+            place += (f". Reference image {pos[c['loc'] + '@전경']} is the wide master of this same room, for layout and materials only; "
+                      f"the background of this shot is the view in reference image {pos[c['loc']]}")
         if "엠블럼" in pos:
-            place += (f". The wall emblem is exactly the emblem in reference image {pos['엠블럼']}: the same geometric shape of "
-                      "brushed metal panels, one emblem only, no letters beside it")
+            place += (f". Where that location reference shows a wall emblem, it is exactly the emblem in reference image {pos['엠블럼']}: "
+                      "the same geometric shape of brushed metal panels, in the same place, no letters beside it. "
+                      "Where the location reference shows no emblem, this shot shows no emblem")
     else:
         place = (loc[1] or loc[0]).rstrip(". ") + ". Every sign and every emblem is a plain abstract shape with no letters"
-    plist = []
+    plist, slist = [], []
     for n in c.get("props", []):
         d = (props or {}).get(n) or n
-        plist.append(f"{d}, the same object as reference image {pos['소품:' + n]}" if "소품:" + n in pos else d)
+        (slist if n in (set_props or set()) else plist).append(
+            f"{d}, the same object as reference image {pos['소품:' + n]}" if "소품:" + n in pos else d)
     lines = [f"Vertical 9:16 still frame from a Korean drama. {SHOT_EN.get(c['size'], 'medium shot').capitalize()}, {ANG_EN.get(c['angle'], 'eye level')}.",
              "Scene, one frozen moment: " + re.sub(r"(?i)\b(CI |company |corporate |brand )?logo\b", "wall emblem",
                                                     c.get("frame_en") or c.get("action_en") or c["action"]),
@@ -504,6 +581,8 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None,
              ("Reference images are identity and set references only: keep faces, hair, clothing and the room exactly, "
               "wear no accessories even if a reference shows one, and take pose, framing and expression from this description.") if refs else "",
              ("Props, exactly these objects, with no other bag and no other item in the hands: " + "; ".join(plist) + ".") if plist else "",
+             ("Objects that stand in the room and are never held; wherever one of them is in frame it is exactly this object, "
+              "one of each: " + "; ".join(slist) + ".") if slist else "",
              "Any prop named in the scene is held in the hands only, never worn.",
              f"Any screen or paper in frame is blank; text is added in editing." if c["screen_text"] else "No text anywhere in the image."]
     return " ".join(x for x in lines if x)

@@ -71,6 +71,9 @@ STYLES = {
 # 캐스팅 시트 (「3 Minutes」 4장 세트 방식): 정면 = 확정 그림, 나머지 3장은 정면을 기준 그림으로 생성.
 SAME = ("The same person as the reference image: identical face, hairstyle, bangs, hair color and clothing. "
         "Neutral relaxed expression. ")
+# 장소 시점: 마스터와 같은 방을 다른 카메라 위치에서 본 기준 그림 (세로 컷이 향하는 방향마다 배경을 고정)
+LOC_VIEW = ("The same room as the reference image: identical architecture, materials, furniture, plants, light and time of day. "
+            "Nothing is added and nothing is removed. No people. The camera stands inside this room at eye level and frames this part of it: ")
 # 분장·의상(룩): 확정 얼굴은 그대로 두고 머리·분장·옷만 바꾼 정면 그림을 만든다.
 LOOK_SAME = ("The same person as the reference image: identical face, identical age, identical body. "
              "The hair, make-up and clothing of the reference are replaced by the look described here. "
