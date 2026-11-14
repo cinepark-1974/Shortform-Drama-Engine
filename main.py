@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.3"
+VERSION = "v1.4"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -336,14 +336,24 @@ def refresh_cut_status(work: dict | None):
 
 
 def refresh_clip_status(work: dict | None):
-    """영상을 만든 뒤 스틸이 바뀐 컷이 있으면 그 화의 영상 단계를 '진행 중'으로 되돌린다 (사람이 찾아보지 않아도 되게)."""
+    """영상을 만든 뒤 스틸이 바뀐 컷, 더빙이 생겨서 이제 만들 수 있는 말하는 컷, 립싱크 뒤에 더빙이 바뀐 컷이 있으면
+    그 화의 영상 단계를 '진행 중'으로 되돌린다 (사람이 찾아보지 않아도 되게)."""
     if not work:
         return
+    lip_on = work.get("talk_model", "omni") != "kling"
     for k, rec in (work.get("clips") or {}).items():
         srec = work.get("stills", {}).get(k, {})
-        if any(c.get("key") and c.get("still") and c["still"] != srec.get(cid, {}).get("pick") for cid, c in rec.items()):
-            if work.get("eps", {}).get(k, {}).get("clip") == "done":
-                work["eps"][k]["clip"] = "doing"
+        drec = work.get("dubs", {}).get(k, {})
+        back = any(c.get("key") and c.get("still") and c["still"] != srec.get(cid, {}).get("pick") for cid, c in rec.items())
+        back = back or any(c.get("key") and c.get("dub_key") and c["dub_key"] != drec.get(cid, {}).get("key") for cid, c in rec.items())
+        if not back and lip_on and drec:
+            for c in (work.get("cuts", {}).get(k, {}) or {}).get("cuts", []):
+                if (c.get("motion") in ("move", "video") and cutter.is_talk(c) and drec.get(c["id"], {}).get("key")
+                        and not rec.get(c["id"], {}).get("key")):
+                    back = True
+                    break
+        if back and work.get("eps", {}).get(k, {}).get("clip") == "done":
+            work["eps"][k]["clip"] = "doing"
 
 
 def stage_counts(work: dict | None) -> dict:
@@ -1696,12 +1706,26 @@ elif cur == "clip":
     rec = clips.setdefault(str(ep_no), {})
     srec = stills.get(str(ep_no), {})
     moving = [c for c in cuts if c["motion"] in ("move", "video")]
+    TALK_KIND = work.get("talk_model", "omni")          # 말하는 컷 방식: omni = 더빙 음성에 입 맞추기, kling = 입만 움직임
+    def lip(c) -> bool:
+        """더빙 음성에 입을 맞춰 만드는 컷."""
+        return TALK_KIND != "kling" and bool(c.get("talk"))
     def stale(c) -> bool:
-        """영상을 만든 뒤에 스틸이 바뀐 컷: 영상이 예전 스틸에서 시작하므로 다시 만들어야 한다."""
+        """영상을 만든 뒤에 스틸이 바뀐 컷(영상이 예전 스틸에서 시작) 또는 립싱크 뒤에 더빙이 바뀐 컷: 다시 만들어야 한다."""
         cell = rec.get(c["id"], {})
-        return bool(cell.get("key") and cell.get("still") and cell["still"] != srec.get(c["id"], {}).get("pick"))
+        if cell.get("key") and cell.get("still") and cell["still"] != srec.get(c["id"], {}).get("pick"):
+            return True
+        return bool(cell.get("key") and cell.get("dub_key") and cell["dub_key"] != drec0.get(c["id"], {}).get("key"))
 
-    missing = [c for c in moving if not rec.get(c["id"], {}).get("key") or stale(c) or rec.get(c["id"], {}).get("rescan_bad")]
+    def relip(c) -> bool:
+        """입만 움직이게 만든 예전 영상이 있는 말하는 컷: 더빙이 있으면 음성에 맞춰 다시 만든다 (직접 올린 영상은 그대로)."""
+        cell = rec.get(c["id"], {})
+        return bool(lip(c) and cell.get("key") and not cell.get("lipsync") and not cell.get("manual") and drec0.get(c["id"], {}).get("key"))
+
+    waiting = [c for c in moving if lip(c) and not drec0.get(c["id"], {}).get("key") and not rec.get(c["id"], {}).get("key")]   # 더빙이 아직 없는 말하는 컷
+    wait_ids = {c["id"] for c in waiting}
+    missing = [c for c in moving if c["id"] not in wait_ids
+               and (not rec.get(c["id"], {}).get("key") or stale(c) or relip(c) or rec.get(c["id"], {}).get("rescan_bad"))]
     running = {cid: r["get"] for cid, r in rec.items() if r.get("get") and r.get("status") not in videogen.DONE}
 
     cutmap = {c["id"]: c for c in cuts}
@@ -1710,7 +1734,8 @@ elif cur == "clip":
         return bool(cell.get("fallback")) and not cell.get("qc_ok")
 
     def finish():
-        ok = all(rec.get(c["id"], {}).get("key") and not stale(c) and not rec[c["id"]].get("rescan_bad") for c in moving)
+        ok = all(rec.get(c["id"], {}).get("key") and not stale(c) and not relip(c) and not rec[c["id"]].get("rescan_bad")
+                 for c in moving if c["id"] not in wait_ids)
         e_s = eps_state.setdefault(str(ep_no), {})
         e_s["clip"] = "done" if ok else "doing"
         e_s["clip_qc"] = sum(1 for c in moving if clip_bad(rec.get(c["id"], {})))
@@ -1821,8 +1846,20 @@ elif cur == "clip":
             if not data:
                 st.error(f"{c['id']}: 확정 스틸이 없습니다")
                 continue
+            dcell = drec0.get(c["id"], {})
+            use_lip = lip(c) and bool(dcell.get("key"))
             try:
-                p = videogen.start(TOKEN, prompt, data, videogen.clip_seconds(c.get("clip_sec") or c["dur"]), VMODEL, mode)
+                if use_lip:          # 말하는 컷: 스틸 + 더빙 음성 → 음성에 입이 맞는 영상 (길이 = 컷 길이만큼 무음을 붙인 음성)
+                    raw = store.get_bytes(dcell["key"])
+                    if not raw:
+                        st.error(f"{c['id']}: 더빙 파일을 읽지 못했습니다")
+                        continue
+                    want = max(float(c.get("clip_sec") or c["dur"]), float(dcell.get("sec") or 0) + 0.4)
+                    aud = videogen.fit_audio(raw, min_sec=round(want, 2), max_sec=33.0, lead_ms=100)
+                    prompt = cutter.talk_prompt(c, castdesc)
+                    p = videogen.start_talk(TOKEN, TALK_KIND, prompt, data, aud, int(want + 0.99))
+                else:
+                    p = videogen.start(TOKEN, prompt, data, videogen.clip_seconds(c.get("clip_sec") or c["dur"]), VMODEL, mode)
             except Exception as ex:
                 st.error(f"{c['id']}: {ex}")
                 continue
@@ -1830,7 +1867,9 @@ elif cur == "clip":
             keep = ("takes", "qc_by", "key") if old.get("still") in (None, still) else ("takes", "qc_by")   # 스틸이 바뀌었으면 예전 영상은 확정에서 뺌
             rec[c["id"]] = {**{k: v for k, v in old.items() if k in keep}, "still": still,
                             "tries": old.get("tries", 0) + 1 if again else 0,
-                            "pred": p["id"], "get": p["get"], "status": p["status"], "prompt": prompt, "mode": mode, "model": VMODEL}
+                            "pred": p["id"], "get": p["get"], "status": p["status"], "prompt": prompt, "mode": mode,
+                            "model": videogen.TALK_MODELS[TALK_KIND]["model"] if use_lip else VMODEL,
+                            **({"dub_key": dcell["key"], "lipsync": True} if use_lip else {})}
             jobs[c["id"]] = p["get"]
         save(work)                      # 예측 번호를 먼저 저장 (창을 닫아도 이어 받기)
         return jobs
@@ -1855,9 +1894,19 @@ elif cur == "clip":
                 st.rerun()
     sec_all = sum(videogen.clip_seconds(c.get("clip_sec") or c["dur"]) for c in moving)
     sec_todo = sum(videogen.clip_seconds(c.get("clip_sec") or c["dur"]) for c in missing)
-    st.caption(f"모델 {VMODEL} · 확정 스틸을 첫 프레임으로 씁니다. 영상 {len(moving)}컷 · 합계 {sec_all}초 (이번에 만들 분량 {len(missing)}컷 · {sec_todo}초). "
-               "컷마다 3초부터 초 단위로 과금됩니다. 말하는 컷은 대사 길이만큼 만들고 입이 움직입니다(대사와 정확히 맞추는 립싱크는 아직 없음). "
+    tk_new = st.radio("말하는 컷", ["omni", "kling"], index=0 if TALK_KIND != "kling" else 1, horizontal=True, key="talk_kind_box",
+                      format_func=lambda k: {"omni": "더빙 음성에 입 맞추기 (OmniHuman 1.5)", "kling": "입만 움직임 (Kling, 음성과 맞지 않음)"}[k])
+    if tk_new != TALK_KIND:
+        work["talk_model"] = tk_new
+        save(work)
+        st.rerun()
+    n_lip = sum(1 for c in moving if lip(c))
+    st.caption(f"확정 스틸을 첫 장면으로 씁니다. 영상 {len(moving)}컷 · 합계 {sec_all}초 (이번에 만들 분량 {len(missing)}컷 · {sec_todo}초), 초 단위로 과금됩니다. "
+               f"말이 없는 컷은 {VMODEL}, 말하는 컷 {n_lip}개는 스틸과 더빙 음성으로 입이 맞는 영상을 만듭니다. "
                "화면 글자 컷만 정지 그림으로 둡니다. 버튼 한 번에 한 화만 진행합니다.")
+    if waiting:
+        st.info(f"말하는 컷 {len(waiting)}개({', '.join(c['id'] for c in waiting)})는 더빙 음성이 있어야 만들 수 있습니다. "
+                "06 더빙을 만든 뒤 여기로 돌아와 버튼을 한 번 더 누르면 그 컷들이 만들어집니다.")
     unscanned = [c for c in moving if rec.get(c["id"], {}).get("key") and not motion_of(rec[c["id"]])]
     fb = [c["id"] for c in moving if clip_bad(rec.get(c["id"], {}))]
     if fb:

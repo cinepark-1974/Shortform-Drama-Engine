@@ -468,6 +468,15 @@ def apply_move(cuts: list, on: bool = True) -> bool:
     return changed
 
 
+def talk_prompt(c: dict, cast: dict) -> str:
+    """음성에 입을 맞추는 모델(OmniHuman)에 주는 짧은 지시문: 누가 말하고, 나머지는 어떻게 있는지."""
+    who = (c.get("dialogue") or {}).get("who", "")
+    spk = cast.get(who, who)
+    others = "Everybody else in the frame keeps the mouth closed and listens. " if len(c.get("chars") or []) > 1 else ""
+    return (f"Only the speaker ({spk}) talks, calmly and naturally as in a Korean office drama, with small head movement and natural blinking. "
+            f"{others}The face, hair, clothes and the room stay exactly as in the image. Static camera, no zoom.")
+
+
 def talk_seconds(c: dict, dub_sec: float | None = None) -> float:
     """영상으로 만들 길이: 컷 길이와 대사 길이(더빙이 있으면 실제 길이 + 0.3초, 없으면 음절 수로 어림) 중 긴 쪽."""
     need = (dub_sec + 0.3) if dub_sec else (need_sec(c) if c.get("dialogue") else 0)
@@ -679,6 +688,9 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None,
              ("Objects that stand in the room and are never held; wherever one of them is in frame it is exactly this object, "
               "one of each: " + "; ".join(slist) + ".") if slist else "",
              "Any prop named in the scene is held in the hands only, never worn.",
+             # 말하는 컷의 스틸은 말을 꺼내기 직전: 입을 다문 얼굴에서 시작해야 음성에 맞춘 입 모양이 자연스럽게 열린다
+             ("Every mouth is closed with the lips together, teeth not visible: this is the instant just before the speaker starts to talk."
+              if is_talk(c) else ""),
              (f"The only writing in the image is the printed text " + " and ".join(f'"{t}"' for t in texts) + " on the prop; "
               "every screen, sign and paper is blank.") if texts else
              (BLANK_SCREEN if c["screen_text"] else "No text anywhere in the image.")]

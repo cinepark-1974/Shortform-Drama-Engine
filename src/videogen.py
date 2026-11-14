@@ -104,7 +104,9 @@ def download(url: str) -> bytes:
 # 입력 형식은 Replicate 모델 페이지에서 확인 (2026-11-14).
 #   wan-video/wan-2.7-i2v : first_frame(그림=첫 프레임), audio(wav/mp3 3~30초 ≤15MB), prompt, negative_prompt, duration 2~15, resolution 720p|1080p
 #   bytedance/seedance-2.0: reference_images(≤9), reference_audios(≤3, 합 15초) — image(첫 프레임)와 함께 못 씀. 프롬프트에서 [Image1]·[Audio1]로 부름
+#   bytedance/omni-human-1.5: image(사람이 있는 그림), audio(mp3/wav, 35초 미만), prompt(선택, 한국어 가능), fast_mode — 영상 길이 = 음성 길이
 TALK_MODELS = {
+    "omni": {"model": "bytedance/omni-human-1.5", "label": "OmniHuman 1.5 (스틸 + 음성 → 말하는 영상)", "min": 1, "max": 34},
     "wan": {"model": "wan-video/wan-2.7-i2v", "label": "Wan 2.7 (스틸 = 첫 장면 + 음성)", "min": 3, "max": 15},
     "seedance": {"model": "bytedance/seedance-2.0", "label": "Seedance 2.0 (스틸 = 참고 그림 + 음성)", "min": 4, "max": 15},
 }
@@ -114,14 +116,15 @@ def audio_uri(mp3: bytes) -> str:
     return "data:audio/mpeg;base64," + base64.b64encode(mp3).decode()
 
 
-def fit_audio(mp3: bytes, min_sec: float = 3.2, max_sec: float = 14.5) -> bytes:
-    """더빙 음성을 모델이 받는 길이로: 짧으면 뒤에 무음을 붙이고 길면 자른다 (ffmpeg). 실패하면 원본."""
+def fit_audio(mp3: bytes, min_sec: float = 3.2, max_sec: float = 14.5, lead_ms: int = 0) -> bytes:
+    """더빙 음성을 모델이 받는 길이로: 짧으면 뒤에 무음을 붙이고 길면 자른다 (ffmpeg). 실패하면 원본.
+    lead_ms 는 앞에 붙이는 무음 — 편집에서 더빙이 컷 시작 0.1초 뒤에 나오므로 입 모양도 그만큼 늦게 시작하게 맞춘다."""
     import subprocess, tempfile
     try:
         with tempfile.TemporaryDirectory() as d:
             a, b = os.path.join(d, "a.mp3"), os.path.join(d, "b.mp3")
             open(a, "wb").write(mp3)
-            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", a, "-af", f"apad=whole_dur={min_sec}", "-t", str(max_sec),
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", a, "-af", (f"adelay={lead_ms}|{lead_ms}," if lead_ms else "") + f"apad=whole_dur={min_sec}", "-t", str(max_sec),
                             "-ar", "44100", "-ac", "1", "-b:a", "128k", b], check=True, timeout=60)
             return open(b, "rb").read()
     except Exception:
@@ -132,6 +135,8 @@ def talk_body(kind: str, prompt: str, still_jpg: bytes, audio_mp3: bytes, second
     """모델별 요청 본문."""
     m = TALK_MODELS[kind]
     sec = max(m["min"], min(m["max"], int(seconds)))
+    if kind == "omni":
+        return {"input": {"image": data_uri(still_jpg), "audio": audio_uri(audio_mp3), "prompt": prompt[:600], "fast_mode": False}}
     if kind == "wan":
         return {"input": {"first_frame": data_uri(still_jpg), "audio": audio_uri(audio_mp3), "prompt": prompt[:2000],
                           "negative_prompt": NEGATIVE, "duration": sec, "resolution": resolution, "enable_prompt_expansion": False}}
