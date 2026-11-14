@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.2.2"
+VERSION = "v1.3"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -1871,6 +1871,78 @@ elif cur == "clip":
         st.rerun()
 
     # ── 콘솔 차선: 다른 곳(Morphic·Higgsfield·AICRON 등)에서 만든 영상을 받아 같은 자리에 넣는다 ──
+    # ── 말하는 컷 모델 시험: 같은 스틸·같은 더빙으로 음성에 입을 맞추는 모델을 나란히 본다 ──
+    with st.expander("말하는 컷 모델 시험 (더빙 음성에 입 맞추기 · Wan 2.7 / Seedance 2.0)"):
+        tests = work.setdefault("talk_tests", {}).setdefault(str(ep_no), {})
+        cand = [c for c in cuts if cutter.is_talk(c) and srec.get(c["id"], {}).get("pick") and drec0.get(c["id"], {}).get("key")]
+        if not cand:
+            st.info("말하는 얼굴 컷 가운데 스틸과 더빙이 모두 있는 컷이 없습니다. 04 콘티 그림과 06 더빙을 먼저 만드세요.")
+        else:
+            st.caption("한 컷을 골라 같은 스틸과 같은 더빙 음성을 두 모델에 보냅니다. 결과는 소리와 함께 재생되니 입 모양이 대사와 맞는지 바로 볼 수 있습니다. "
+                       "한 번에 두 영상(각 3~6초) 값이 Replicate에서 나갑니다.")
+            tc = st.selectbox("시험할 컷", cand, key=f"talk_pick_{ep_no}",
+                              format_func=lambda c: f"{c['id']} · {c['dialogue'].get('who', '')}: {c['dialogue'].get('text', '')[:28]}")
+            kinds = st.multiselect("모델", list(videogen.TALK_MODELS), default=list(videogen.TALK_MODELS), key=f"talk_kinds_{ep_no}",
+                                   format_func=lambda k: videogen.TALK_MODELS[k]["label"])
+            if st.button(f"{tc['id']} 컷으로 시험하기", type="primary", disabled=not (TOKEN and kinds)):
+                with st.status("말하는 컷 시험 영상 만드는 중… (모델마다 1~5분)") as box:
+                    still_b = img_bytes(srec[tc["id"]]["pick"])
+                    dsec = float(drec0[tc["id"]].get("sec") or 3)
+                    raw = store.get_bytes(drec0[tc["id"]]["key"])
+                    if not (still_b and raw):
+                        st.error("이 컷의 스틸이나 더빙 파일을 읽지 못했습니다. 06 더빙에서 이 줄을 다시 만든 뒤 시험하세요.")
+                        st.stop()
+                    aud = videogen.fit_audio(raw)
+                    pr = cutter.video_prompt(tc, castdesc)
+                    cellt = tests.setdefault(tc["id"], {})
+                    jobs = {}
+                    for kd in kinds:
+                        try:
+                            jobs[kd] = videogen.start_talk(TOKEN, kd, pr, still_b, aud, int(dsec + 0.99) if dsec > 3 else 3)["get"]
+                            cellt[kd] = {"status": "processing"}
+                        except Exception as ex:
+                            cellt[kd] = {"status": "failed", "error": str(ex)[:400]}
+                    save(work)
+                    res = videogen.wait_all(TOKEN, jobs) if jobs else {}
+                    for kd, r in res.items():
+                        if r.get("status") == "succeeded" and r.get("output"):
+                            try:
+                                k = f"works/{work['id']}/test/ep{ep_no:03d}/{tc['id']}_{kd}_{uuid.uuid4().hex[:6]}.mp4"
+                                store.put_bytes(k, videogen.download(r["output"]), "video/mp4")
+                                cellt[kd] = {"status": "succeeded", "key": k}
+                            except Exception as ex:
+                                cellt[kd] = {"status": "failed", "error": f"받기 실패: {str(ex)[:300]}"}
+                        else:
+                            cellt[kd] = {"status": r.get("status") or "failed", "error": str(r.get("error"))[:400]}
+                    save(work)
+                    box.update(label="시험 완료", state="complete")
+                st.rerun()
+            got = tests.get(tc["id"], {})
+            if got:
+                tcols = st.columns(1 + len(got))
+                with tcols[0]:
+                    st.markdown("**지금 영상 (Kling)**")
+                    kk = rec.get(tc["id"], {}).get("key")
+                    if kk:
+                        st.video(store.get_bytes(kk))
+                    else:
+                        st.image(img_bytes(srec[tc["id"]]["pick"]), caption="아직 영상 없음 (스틸)")
+                for j, (kd, tr) in enumerate(got.items(), start=1):
+                    with tcols[j]:
+                        st.markdown(f"**{videogen.TALK_MODELS.get(kd, {}).get('label', kd)}**")
+                        if tr.get("key"):
+                            st.video(store.get_bytes(tr["key"]))
+                            if st.button("이 영상을 이 컷에 쓰기", key=f"talk_use_{ep_no}_{tc['id']}_{kd}"):
+                                oc = rec.get(tc["id"], {})
+                                rec[tc["id"]] = {"takes": oc.get("takes", []) + [tr["key"]], "qc_by": oc.get("qc_by", {}), "key": tr["key"],
+                                                 "still": srec[tc["id"]]["pick"], "status": "succeeded", "tries": 0, "manual": True,
+                                                 "prompt": cutter.video_prompt(tc, castdesc), "model": videogen.TALK_MODELS[kd]["model"]}
+                                finish()
+                                save(work)
+                                st.rerun()
+                        else:
+                            st.error(f"{tr.get('status')}: {tr.get('error', '')}")
+
     with st.expander("다른 곳에서 만든 영상 넣기 (Morphic · Higgsfield · AICRON 등)"):
         st.caption("① 꾸러미를 내려받습니다: 컷마다 스틸(첫 장면)·더빙 음성·지시문이 들어 있습니다. ② 바깥 도구에서 스틸로 영상을 만들고, 말하는 컷은 더빙 음성으로 립싱크를 합니다. "
                    "③ 파일 이름을 컷 번호로 시작하게 저장해(예: 1-5.mp4) 한꺼번에 올립니다. 올린 영상은 엔진이 검수하고 편집에 씁니다.")

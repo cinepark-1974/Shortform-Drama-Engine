@@ -98,3 +98,55 @@ def download(url: str) -> bytes:
     r = requests.get(url, timeout=300)
     r.raise_for_status()
     return r.content
+
+
+# ── 말하는 컷: 더빙 음성을 넣어 그 음성에 입을 맞추는 모델 (v1.3 시험) ─────────────────────────
+# 입력 형식은 Replicate 모델 페이지에서 확인 (2026-11-14).
+#   wan-video/wan-2.7-i2v : first_frame(그림=첫 프레임), audio(wav/mp3 3~30초 ≤15MB), prompt, negative_prompt, duration 2~15, resolution 720p|1080p
+#   bytedance/seedance-2.0: reference_images(≤9), reference_audios(≤3, 합 15초) — image(첫 프레임)와 함께 못 씀. 프롬프트에서 [Image1]·[Audio1]로 부름
+TALK_MODELS = {
+    "wan": {"model": "wan-video/wan-2.7-i2v", "label": "Wan 2.7 (스틸 = 첫 장면 + 음성)", "min": 3, "max": 15},
+    "seedance": {"model": "bytedance/seedance-2.0", "label": "Seedance 2.0 (스틸 = 참고 그림 + 음성)", "min": 4, "max": 15},
+}
+
+
+def audio_uri(mp3: bytes) -> str:
+    return "data:audio/mpeg;base64," + base64.b64encode(mp3).decode()
+
+
+def fit_audio(mp3: bytes, min_sec: float = 3.2, max_sec: float = 14.5) -> bytes:
+    """더빙 음성을 모델이 받는 길이로: 짧으면 뒤에 무음을 붙이고 길면 자른다 (ffmpeg). 실패하면 원본."""
+    import subprocess, tempfile
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a, b = os.path.join(d, "a.mp3"), os.path.join(d, "b.mp3")
+            open(a, "wb").write(mp3)
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", a, "-af", f"apad=whole_dur={min_sec}", "-t", str(max_sec),
+                            "-ar", "44100", "-ac", "1", "-b:a", "128k", b], check=True, timeout=60)
+            return open(b, "rb").read()
+    except Exception:
+        return mp3
+
+
+def talk_body(kind: str, prompt: str, still_jpg: bytes, audio_mp3: bytes, seconds: int, resolution: str = "1080p") -> dict:
+    """모델별 요청 본문."""
+    m = TALK_MODELS[kind]
+    sec = max(m["min"], min(m["max"], int(seconds)))
+    if kind == "wan":
+        return {"input": {"first_frame": data_uri(still_jpg), "audio": audio_uri(audio_mp3), "prompt": prompt[:2000],
+                          "negative_prompt": NEGATIVE, "duration": sec, "resolution": resolution, "enable_prompt_expansion": False}}
+    return {"input": {"prompt": ("The video starts exactly on [Image1]: same person, same face, same clothes, same room, same framing, vertical 9:16. "
+                                 "The speaker says the line heard in [Audio1]; the lips match [Audio1] exactly. Use [Audio1] as the only voice, no music. "
+                                 + prompt)[:2000],
+                      "reference_images": [data_uri(still_jpg)], "reference_audios": [audio_uri(audio_mp3)],
+                      "duration": sec, "resolution": "720p", "aspect_ratio": "9:16", "generate_audio": True}}
+
+
+def start_talk(token: str, kind: str, prompt: str, still_jpg: bytes, audio_mp3: bytes, seconds: int, api: str = API) -> dict:
+    """말하는 컷 예측 시작 → {'id','status','get'}."""
+    r = requests.post(f"{api}/models/{TALK_MODELS[kind]['model']}/predictions", json=talk_body(kind, prompt, still_jpg, audio_mp3, seconds),
+                      timeout=90, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    if r.status_code >= 400:
+        raise RuntimeError(f"Replicate {r.status_code}: {r.text[:400]}")
+    p = r.json()
+    return {"id": p["id"], "status": p.get("status", "starting"), "get": p.get("urls", {}).get("get", f"{api}/predictions/{p['id']}")}
