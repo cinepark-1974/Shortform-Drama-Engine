@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.4.1"
+VERSION = "v1.4.2"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -1722,6 +1722,13 @@ elif cur == "clip":
         cell = rec.get(c["id"], {})
         return bool(lip(c) and cell.get("key") and not cell.get("lipsync") and not cell.get("manual") and drec0.get(c["id"], {}).get("key"))
 
+    for _cid, _cell in rec.items():                     # v1.4 데이터: 립싱크 요청이 실패했는데 표시만 남은 컷을 바로잡는다
+        if _cell.get("lipsync") and "lip_takes" not in _cell:
+            good = _cell.get("status") == "succeeded" and _cell.get("takes") and _cell.get("key") == _cell["takes"][-1]
+            _cell["lip_takes"] = [_cell["key"]] if good else []
+            _cell["lipsync"] = bool(good)
+            _cell["lip_job"] = True
+
     waiting = [c for c in moving if lip(c) and not drec0.get(c["id"], {}).get("key") and not rec.get(c["id"], {}).get("key")]   # 더빙이 아직 없는 말하는 컷
     wait_ids = {c["id"] for c in waiting}
     missing = [c for c in moving if c["id"] not in wait_ids
@@ -1814,6 +1821,10 @@ elif cur == "clip":
                     store.put_bytes(k, data, "video/mp4")
                     cell.setdefault("takes", []).append(k)
                     cell["key"] = k
+                    cell.pop("manual", None)
+                    if cell.get("lip_job"):
+                        cell.setdefault("lip_takes", []).append(k)
+                    cell["lipsync"] = k in cell.get("lip_takes", [])
                     box.update(label=f"{cid} 영상 검수 중…")
                     q = judge_take(cid, data)
                     cell["qc"] = q
@@ -1824,8 +1835,10 @@ elif cur == "clip":
                     elif cell.get("tries", 0) < QC_RETRY:
                         retry.append((cutmap[cid], qc.fix_prompt(cell.get("prompt", ""), q)))
                     else:                            # 다시 만들어도 불합격: 가장 나은 테이크 + 정지 컷 전환 표시
-                        bk = min(cell["takes"], key=lambda t: qc.score(cell.get("qc_by", {}).get(t)))
+                        pool = cell.get("lip_takes") if cell.get("lip_job") and cell.get("lip_takes") else cell["takes"]   # 말하는 컷은 립싱크 테이크 안에서만
+                        bk = min(pool, key=lambda t: qc.score(cell.get("qc_by", {}).get(t)))
                         cell["key"], cell["qc"] = bk, cell["qc_by"].get(bk)
+                        cell["lipsync"] = bk in cell.get("lip_takes", [])
                         cell["fallback"] = not (cell["qc"] or {}).get("pass", True)
                 elif r.get("status") in ("failed", "canceled"):
                     cell["error"] = str(r.get("error"))[:300]
@@ -1869,7 +1882,8 @@ elif cur == "clip":
                             "tries": old.get("tries", 0) + 1 if again else 0,
                             "pred": p["id"], "get": p["get"], "status": p["status"], "prompt": prompt, "mode": mode,
                             "model": videogen.TALK_MODELS[TALK_KIND]["model"] if use_lip else VMODEL,
-                            **({"dub_key": dcell["key"], "lipsync": True} if use_lip else {})}
+                            **({k: old[k] for k in ("lip_takes", "lipsync", "manual") if k in old and "key" in keep}),
+                            **({"dub_key": dcell["key"], "lip_job": True} if use_lip else {})}
             jobs[c["id"]] = p["get"]
         save(work)                      # 예측 번호를 먼저 저장 (창을 닫아도 이어 받기)
         return jobs
@@ -2362,7 +2376,8 @@ else:
                  json.dumps({c["id"]: [srec.get(c["id"], {}).get("pick"), crec.get(c["id"], {}).get("key"), drec.get(c["id"], {}).get("key"),
                                        bool(crec.get(c["id"], {}).get("fallback")) and not crec.get(c["id"], {}).get("qc_ok"),
                                        (((crec.get(c["id"], {}).get("qc_by") or {}).get(crec.get(c["id"], {}).get("key")) or {}).get("motion") or {}).get("start")] for c in cuts}),
-                 json.dumps(sub.get("lines", {}), ensure_ascii=False, sort_keys=True), hook, str(work.get("edit_en", True))]
+                 json.dumps(sub.get("lines", {}), ensure_ascii=False, sort_keys=True), hook, str(work.get("edit_en", True)),
+                 "edit-v2" if any(crec.get(c["id"], {}).get("lipsync") for c in cuts) else ""]   # 립싱크 컷의 편집 방식이 바뀜(v1.4.2) → 다시 렌더링
         return hashlib.md5("|".join(parts).encode()).hexdigest()[:12]
 
     fin = finals.get(k, {})

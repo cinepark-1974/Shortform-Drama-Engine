@@ -222,7 +222,8 @@ def probe_len(path: str) -> float:
 
 
 def render_cut(out_path: str, dur: float, still: bytes | None = None, clip: bytes | None = None, camera: str = "고정",
-               overlay: bytes | None = None, audio: bytes | None = None, workdir: str = "", clip_start: float = 0.0) -> dict:
+               overlay: bytes | None = None, audio: bytes | None = None, workdir: str = "", clip_start: float = 0.0,
+               sync: bool = False) -> dict:
     """컷 하나를 1080x1920 mp4 로. clip 이 있으면 영상 컷, 없으면 still 정지 컷. → 영상 컷이면 clip_plan 결과."""
     d = workdir or os.path.dirname(out_path)
     n = max(1, int(round(dur * FPS)))
@@ -230,7 +231,9 @@ def render_cut(out_path: str, dur: float, still: bytes | None = None, clip: byte
     if clip:
         src = os.path.join(d, "src.mp4")
         open(src, "wb").write(clip)
-        plan = clip_plan(probe_len(src), dur, clip_start)
+        clen = probe_len(src)
+        # 립싱크 영상은 음성과 한 몸: 처음부터, 제 속도로만 쓴다 (구간을 옮기거나 느리게 하면 입과 소리가 어긋남)
+        plan = {"start": 0.0, "slow": 1.0, "frozen": round(max(0.0, dur - clen), 2)} if sync else clip_plan(clen, dur, clip_start)
         args += (["-ss", f"{plan['start']:.2f}"] if plan["start"] else []) + ["-i", src]
         slow = f"setpts={plan['slow']:.3f}*(PTS-STARTPTS)," if plan["slow"] > 1.0 else "setpts=PTS-STARTPTS,"
         fc.append(f"[0:v]{slow}scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS},"
@@ -306,7 +309,8 @@ def render_episode(cuts: list, get, stills: dict, clips: dict, dub: dict, subs: 
             q = (cell.get("qc_by") or {}).get(cell.get("key")) or cell.get("qc") or {}
             plan = render_cut(out, seg["dur"], still=None if use_clip else still, clip=get(cell["key"]) if use_clip else None,
                               camera=c.get("camera", "고정"), overlay=ov, audio=au, workdir=sub,
-                              clip_start=float((q.get("motion") or {}).get("start", 0) or 0))
+                              clip_start=float((q.get("motion") or {}).get("start", 0) or 0),
+                              sync=bool(use_clip and cell.get("lipsync")))
             seg["kind"] = "clip" if use_clip else "still"
             if plan:
                 seg.update({"clip_start": plan["start"], "slow": plan["slow"], "frozen": plan["frozen"]})
