@@ -108,7 +108,7 @@ def download(url: str) -> bytes:
 TALK_MODELS = {
     "omni": {"model": "bytedance/omni-human-1.5", "label": "OmniHuman 1.5 (스틸 + 음성 → 말하는 영상)", "min": 1, "max": 34},
     "wan": {"model": "wan-video/wan-2.7-i2v", "label": "Wan 2.7 (스틸 = 첫 장면 + 음성)", "min": 3, "max": 15},
-    "seedance": {"model": "bytedance/seedance-2.0", "label": "Seedance 2.0 (스틸 = 참고 그림 + 음성)", "min": 4, "max": 15},
+    # seedance(bytedance/seedance-2.0)는 뺌: 실사 얼굴 스틸을 "실존 인물일 수 있음"으로 거절함 (EP1 시험, 2026-11-16)
 }
 
 

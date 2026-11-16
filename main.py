@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.4"
+VERSION = "v1.4.1"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -1921,7 +1921,7 @@ elif cur == "clip":
 
     # ── 콘솔 차선: 다른 곳(Morphic·Higgsfield·AICRON 등)에서 만든 영상을 받아 같은 자리에 넣는다 ──
     # ── 말하는 컷 모델 시험: 같은 스틸·같은 더빙으로 음성에 입을 맞추는 모델을 나란히 본다 ──
-    with st.expander("말하는 컷 모델 시험 (더빙 음성에 입 맞추기 · Wan 2.7 / Seedance 2.0)"):
+    with st.expander("말하는 컷 모델 시험 (더빙 음성에 입 맞추기 · OmniHuman 1.5 / Wan 2.7)"):
         tests = work.setdefault("talk_tests", {}).setdefault(str(ep_no), {})
         cand = [c for c in cuts if cutter.is_talk(c) and srec.get(c["id"], {}).get("pick") and drec0.get(c["id"], {}).get("key")]
         if not cand:
@@ -1966,7 +1966,7 @@ elif cur == "clip":
                     save(work)
                     box.update(label="시험 완료", state="complete")
                 st.rerun()
-            got = tests.get(tc["id"], {})
+            got = {kd: tr for kd, tr in tests.get(tc["id"], {}).items() if kd in videogen.TALK_MODELS or tr.get("key")}
             if got:
                 tcols = st.columns(1 + len(got))
                 with tcols[0]:
