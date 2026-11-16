@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.5"
+VERSION = "v1.5.1"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -1553,13 +1553,31 @@ elif cur == "still":
     bad_cuts = [c for c in cuts if qc_bad(rec.get(c["id"], {}))]
     unchecked = [c for c in have if not rec[c["id"]].get("qc")]
     ep_steps(work, ep_no, "still")
+    # 화면 컷(휴대폰·노트북)인데 예전 규칙으로 그려 화면이 비스듬한 그림: 정면 한가운데 구도로 다시 그릴 대상
+    screen_old = [c for c in cuts if c.get("screen_text") and rec.get(c["id"], {}).get("pick")
+                  and "exact center of the frame" not in (rec[c["id"]].get("prompt") or "")]
     if missing:
         guide(f"<b>① EP {ep_no} 그림 만들기 ({len(missing)}컷)</b> — 컷마다 첫 장면을 그리고 자동으로 검수합니다 (2~6분).")
     elif bad_cuts:
         guide(f"<b>② 불합격 컷 고치기 ({len(bad_cuts)}컷)</b> — 검수에서 떨어진 컷만 고쳐서 다시 그립니다.")
+    elif screen_old:
+        guide(f"<b>③ 화면 컷 {len(screen_old)}개 정면으로 다시 그리기</b> — 휴대폰·노트북 화면이 비스듬한 그림({', '.join(c['id'] for c in screen_old)})을 "
+              "화면이 정면 한가운데에 오는 구도로 다시 그립니다. 다른 컷은 건드리지 않습니다.")
     else:
         guide("그림이 모두 확정됐습니다. 아래 노란 버튼으로 다음 단계로 갑니다.", done=True)
         next_button(work, "still", ep_no)
+    if screen_old and not missing:
+        if st.button(f"③ 화면 컷 {len(screen_old)}개 정면으로 다시 그리기", type="primary" if not bad_cuts else "secondary",
+                     disabled=not KEYS.get("OPENAI_API_KEY"), key="screen_front"):
+            with st.status(f"화면 컷 {len(screen_old)}개를 정면 구도로 다시 그리는 중…") as s:
+                for c in screen_old:
+                    rec[c["id"]].pop("prompt", None)
+                    st.session_state.pop(f"sp_{c['id']}", None)
+                make([(c, cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c), set(set_loc(work)), prop_texts(work)),
+                       refs_for(c)) for c in screen_old])
+                finish()
+                s.update(label="다시 그리기 완료", state="complete")
+            st.rerun()
     q1, q2, q3 = st.columns([1, 1, 2])
     with q1:
         if st.button(f"검수만 하기 ({len(have)}컷 · 그림 비용 없음)", disabled=not (KEYS.get("ANTHROPIC_API_KEY") and have),

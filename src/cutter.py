@@ -75,7 +75,8 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 - 손가락이 화면 가운데 크게 나오는 컷은 INSERT 로만, 행동 하나(쥔다·누른다)로.
 - 몸에 거는 작은 소품(사원증·출입증·방문증 목걸이, 명찰, 장신구, 시계, 이어폰)은 쓰지 않음.
   대본에 소품이 필요하면 그 컷에서 손에 들고 있게 쓰거나 INSERT 컷으로 보여 줌. '목에 건' 같은 표현 금지.
-- 휴대폰·모니터 화면은 화면이 카메라를 향하게만 쓰고, 화면 글자는 screen_text 에만 적음.
+- 휴대폰·모니터 화면을 보여 주는 컷(screen_text 가 있는 컷)의 고정 규칙: 화면이 프레임 한가운데에, 카메라와 정면으로 마주 보게, 기울임 없이 크게 보인다.
+  휴대폰은 손이 아래쪽만 받치고 화면을 가리지 않는다. frame 에 '비스듬히', '기울여', '어깨 너머로' 같은 각도를 쓰지 않는다. 화면 글자는 screen_text 에만 적음.
   frame·motion 에 화면 내용(알림, 발신자 이름, 메시지, 태그, 메일)을 쓰지 않음. frame 에는 "화면이 카메라를 향한 휴대폰을 쥔 손"처럼 물건과 손만 씀.
   그림·영상 AI는 화면 글자를 한자나 깨진 글자로 그림. 화면은 빈 화면으로 찍고 글자·켜짐·꺼짐은 편집에서 얹음.
   얼굴 없이 화면만 보여 주는 컷(휴대폰·모니터 INSERT)은 motion "still", motion_ko 는 "카메라만 움직인다". 마지막 컷이 이런 컷이어도 "still".
@@ -592,8 +593,10 @@ def check(cuts: list, known_chars: set, known_locs: set, scenes: list | None = N
 
 BLANK_SCREEN = ("Every phone screen and every monitor screen in frame is switched off: a plain black glass surface with no characters, "
                 "no icons, no numbers, no interface and no reflection of a face. Every paper is blank white. "
-                "The one screen this shot is about faces the camera squarely, upright with no tilt, and fills more than half of the frame height; "
-                "all four corners of its glass are visible and no finger covers the glass. "
+                "The one screen this shot is about is in the exact center of the frame, facing the camera squarely: its glass is parallel to the lens, "
+                "its edges are vertical and horizontal with no tilt and no perspective, and it fills more than half of the frame height; "
+                "all four corners of its glass are visible and no finger covers the glass. A hand holds a phone from below at its lower edge only. "
+                "This framing overrides any angle named in the scene description. "
                 "Screen content is added in editing. No text anywhere in the image.")
 SCREEN_CLAUSE = re.compile(r",?\s*\b(displaying|showing|shows|displays|reading|reads|lit up with)\b[^.;]*?\b(notification|caller|message|text|"
                            r"incoming call|call screen|name|tag|email|e-mail|chat|alert|pop-up|popup|interface|words?)\b[^.;,]*", re.I)
