@@ -592,6 +592,8 @@ def check(cuts: list, known_chars: set, known_locs: set, scenes: list | None = N
 
 BLANK_SCREEN = ("Every phone screen and every monitor screen in frame is switched off: a plain black glass surface with no characters, "
                 "no icons, no numbers, no interface and no reflection of a face. Every paper is blank white. "
+                "The one screen this shot is about faces the camera squarely, upright with no tilt, and fills more than half of the frame height; "
+                "all four corners of its glass are visible and no finger covers the glass. "
                 "Screen content is added in editing. No text anywhere in the image.")
 SCREEN_CLAUSE = re.compile(r",?\s*\b(displaying|showing|shows|displays|reading|reads|lit up with)\b[^.;]*?\b(notification|caller|message|text|"
                            r"incoming call|call screen|name|tag|email|e-mail|chat|alert|pop-up|popup|interface|words?)\b[^.;,]*", re.I)

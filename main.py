@@ -16,10 +16,10 @@ from pathlib import Path
 import streamlit as st
 
 from src import videogen, bible as bb
-from src import cutter, dubbing, editor, imagegen, profiles, qc, script_parser
+from src import cutter, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.4.2"
+VERSION = "v1.5"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -100,8 +100,8 @@ STAGES = [
     ("cast", "02", "캐스팅", "인물 · 장소 기준 이미지"),
     ("cut", "03", "콘티", "컷 나누기 · 첫 장면 · 움직임"),
     ("still", "04", "콘티 그림", "컷별 첫 장면 스틸 · 자동 검수"),
-    ("clip", "05", "영상", "움직임 · 완전 영상"),
-    ("dub", "06", "더빙", "인물별 고정 목소리"),
+    ("dub", "05", "더빙", "인물별 고정 목소리"),
+    ("clip", "06", "영상", "움직임 · 말하는 컷 입 맞춤"),
     ("sub", "07", "자막·사운드", "한/영 자막 · 효과음"),
     ("edit", "08", "편집", "9:16 렌더링"),
     ("master", "09", "마스터", "확인 · 업로드"),
@@ -385,7 +385,7 @@ def cast_split(work: dict) -> str:
     return f"인물 {a}/{len(chars)} · 장소 {b}/{len(locs)}"
 
 
-EP_STAGES = ["cut", "still", "clip", "dub", "sub", "edit", "master"]
+EP_STAGES = ["cut", "still", "dub", "clip", "sub", "edit", "master"]      # 더빙 → 영상 순서 (v1.5)
 EP_W = {"cut": 5, "still": 20, "clip": 30, "dub": 10, "sub": 10, "edit": 15, "master": 10}   # 한 화 안에서 작업량 비중(%)
 BINGE = 7                                                                                      # 몰아보기 한 편 = 7화
 
@@ -488,7 +488,7 @@ def jump(k: str, ep: int | None = None):
     st.rerun()
 
 
-def go_bar(p: dict, key: str = "go_next"):
+def go_bar(p: dict, key: str = "go_next", primary: bool = True):
     """지금 할 일 안내 + 그 자리로 가는 버튼. 다른 단계에 있으면 노란 버튼으로 데려간다."""
     here = st.session_state.get("stage_pick", stage_label("script"))
     target = stage_label(p["next_stage"])
@@ -498,8 +498,41 @@ def go_bar(p: dict, key: str = "go_next"):
             names = ", ".join(p["left"][:8]) + (f" 외 {len(p['left']) - 8}" if len(p["left"]) > 8 else "")
             st.caption(f"확정이 남은 칸: {names} · 인물 수·장소 수 막대를 줄이면 바로 다음 단계가 열립니다.")
     with c2:
-        if here != target and st.button(f"지금 할 일로 → {target}", type="primary", key=key, width="stretch"):
+        if here != target and st.button(f"지금 할 일로 → {target}", type="primary" if primary else "secondary", key=key, width="stretch"):
             jump(p["next_stage"], p["next_ep"])
+
+
+def ep_steps(work, ep_no: int, here: str):
+    """이 화가 어디까지 왔는지 한 줄로 보여 준다 (끝난 단계 ✓, 지금 할 단계는 노란 칸)."""
+    es = work.get("eps", {}).get(str(ep_no), {})
+    first = next((k for k in EP_STAGES if es.get(k) != "done"), None)
+    chips = []
+    for k in EP_STAGES:
+        n, t = next((n, t) for kk, n, t, d in STAGES if kk == k)
+        done, now_ = es.get(k) == "done", k == first
+        bg, fg, bd = ("#191970", "#fff", "#191970") if done else ("#FFCB05", "#191970", "#FFCB05") if now_ else ("#fff", "#8a93a6", "#d5dbe7")
+        ring = "box-shadow:0 0 0 3px rgba(25,25,112,.25);" if k == here else ""
+        chips.append(f"<span style='display:inline-block;padding:4px 10px;margin:2px 3px 2px 0;border-radius:14px;font-size:13px;font-weight:700;"
+                     f"background:{bg};color:{fg};border:1px solid {bd};{ring}'>{n} {t}{' ✓' if done else ' · 지금' if now_ else ''}</span>")
+    st.markdown(f"<div style='margin:2px 0 6px'><span class='small'><b>EP {ep_no}</b> 진행 </span>{' → '.join(chips)}</div>", unsafe_allow_html=True)
+
+
+def guide(text: str, done: bool = False):
+    """이 화면에서 지금 누를 버튼을 한 줄로 알려 준다."""
+    bg, bd, head = ("#EAF7EE", "#2E9E5B", "이 단계 완료") if done else ("#FFF6CC", "#FFCB05", "지금 누를 버튼")
+    st.markdown(f"<div style='background:{bg};border-left:8px solid {bd};padding:10px 14px;border-radius:8px;margin:4px 0 10px;"
+                f"font-size:16px;color:#191970'><b>{head}</b> &nbsp;→&nbsp; {text}</div>", unsafe_allow_html=True)
+
+
+def next_button(work, cur_key: str, ep_no: int, key: str = "go_next_stage"):
+    """이 화의 이 단계가 끝났으면 다음 단계로 가는 버튼(노란색) 하나를 보여 준다."""
+    if work.get("eps", {}).get(str(ep_no), {}).get(cur_key) != "done":
+        return
+    i = EP_STAGES.index(cur_key)
+    if i + 1 < len(EP_STAGES):
+        nk = EP_STAGES[i + 1]
+        if st.button(f"다음 단계로 → {stage_label(nk)}", type="primary", key=f"{key}_{cur_key}"):
+            jump(nk, ep_no)
 
 
 def locked(work, k) -> bool:
@@ -1244,7 +1277,8 @@ elif cur == "cut":
     ep = parsed["episodes"][ep_no - 1]
     with c2:
         st.write("")
-        if st.button("이 화 콘티 만들기" if str(ep_no) not in allcuts else "이 화 콘티 다시 만들기", type="primary", disabled=not KEYS.get("ANTHROPIC_API_KEY"),
+        if st.button("① 이 화 콘티 만들기" if str(ep_no) not in allcuts else "이 화 콘티 다시 만들기",
+                     type="primary" if str(ep_no) not in allcuts else "secondary", disabled=not KEYS.get("ANTHROPIC_API_KEY"),
                      help="다시 만들면 이 화의 기존 스틸·영상은 보관함으로 옮기고 새 콘티로 처음부터 만듭니다."):
             with st.spinner(f"EP {ep_no} 콘티 만드는 중… 준비물 뽑기 → 컷 나누기 → 감수 (2~3분)"):
                 run_breakdown(ep_no, ep)
@@ -1277,6 +1311,14 @@ elif cur == "cut":
     items = prep_items(work, str(ep_no), {l["id"]: l["name"] for l in B["locations"]})
     lack = [it for it in items if not it["ready"]]
     can = [it for it in lack if it["kind"] == "prop" or (it["kind"] in ("view", "look") and it.get("ref"))]
+    ep_steps(work, ep_no, "cut")
+    if str(ep_no) not in allcuts:
+        guide("<b>① 이 화 콘티 만들기</b> — 대본을 컷으로 나누고 이 화에 필요한 준비물을 뽑습니다 (2~3분).")
+    elif can:
+        guide(f"<b>② 없는 기준 그림 한 번에 만들기 ({len(can)}장)</b> — 아래 '이 화 준비물' 칸 안에 있습니다.")
+    else:
+        guide("콘티와 준비물이 준비됐습니다. 아래 노란 버튼으로 다음 단계로 갑니다.", done=True)
+        next_button(work, "cut", ep_no)
     with st.expander(f"이 화 준비물 · {len(items)}개 · 기준 그림 없음 {len(lack)}개", expanded=bool(lack)):
         st.markdown("<div class='small'>이 화 대본에서 뽑은 장소 시점 · 소품 · 분장의상입니다. 콘티를 만들 때 자동으로 뽑아 등록합니다. "
                     "기준 그림이 있어야 컷마다 배경·소품·옷이 같게 나옵니다. 그림을 바꾸거나 직접 올리려면 02 캐스팅에서 합니다.</div>", unsafe_allow_html=True)
@@ -1291,7 +1333,7 @@ elif cur == "cut":
                 save(work)
                 st.rerun()
         with p2:
-            if st.button(f"없는 기준 그림 한 번에 만들기 ({len(can)}장)", type="primary", disabled=not (KEYS.get("OPENAI_API_KEY") and can), key="prep_make",
+            if st.button(f"② 없는 기준 그림 한 번에 만들기 ({len(can)}장)", type="primary" if can else "secondary", disabled=not (KEYS.get("OPENAI_API_KEY") and can), key="prep_make",
                          help="장소 시점은 마스터를, 분장·의상은 확정 얼굴을 기준 그림으로 넣어 한 장씩 만들고 바로 확정합니다. 마스터가 없는 장소는 02 캐스팅에서 먼저 만듭니다."):
                 with st.status(f"기준 그림 {len(can)}장 생성 중… (4장씩 동시)") as stt_:
                     make_prep(can)
@@ -1494,8 +1536,8 @@ elif cur == "still":
 
     with c3:
         st.write("")
-        label = f"EP {ep_no} 스틸 만들기 ({len(missing)}컷)" if missing else f"EP {ep_no} 스틸 완료 · {picked}/{len(cuts)}컷 확정"
-        if st.button(label, type="primary", disabled=not (KEYS.get("OPENAI_API_KEY") and missing)):
+        label = f"① EP {ep_no} 그림 만들기 ({len(missing)}컷)" if missing else f"EP {ep_no} 그림 완료 · {picked}/{len(cuts)}컷 확정"
+        if st.button(label, type="primary" if missing else "secondary", disabled=not (KEYS.get("OPENAI_API_KEY") and missing)):
             with st.status(f"EP {ep_no} 스틸 {len(missing) * n_c}장 생성{' · 자동 검수' if AUTO_QC else ''} 중… (4컷씩 동시, 2~6분)") as s:
                 make([(c, cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c), set(set_loc(work)), prop_texts(work)), refs_for(c)) for c in missing])
                 finish()
@@ -1510,6 +1552,14 @@ elif cur == "still":
     have = [c for c in cuts if rec.get(c["id"], {}).get("pick")]
     bad_cuts = [c for c in cuts if qc_bad(rec.get(c["id"], {}))]
     unchecked = [c for c in have if not rec[c["id"]].get("qc")]
+    ep_steps(work, ep_no, "still")
+    if missing:
+        guide(f"<b>① EP {ep_no} 그림 만들기 ({len(missing)}컷)</b> — 컷마다 첫 장면을 그리고 자동으로 검수합니다 (2~6분).")
+    elif bad_cuts:
+        guide(f"<b>② 불합격 컷 고치기 ({len(bad_cuts)}컷)</b> — 검수에서 떨어진 컷만 고쳐서 다시 그립니다.")
+    else:
+        guide("그림이 모두 확정됐습니다. 아래 노란 버튼으로 다음 단계로 갑니다.", done=True)
+        next_button(work, "still", ep_no)
     q1, q2, q3 = st.columns([1, 1, 2])
     with q1:
         if st.button(f"검수만 하기 ({len(have)}컷 · 그림 비용 없음)", disabled=not (KEYS.get("ANTHROPIC_API_KEY") and have),
@@ -1534,7 +1584,7 @@ elif cur == "still":
                 s.update(label=f"검수 완료 · 불합격 {sum(1 for r in res if not r['pass'])}컷", state="complete")
             st.rerun()
     with q2:
-        if st.button(f"불합격 컷 고치기 ({len(bad_cuts)}컷)", disabled=not (KEYS.get("OPENAI_API_KEY") and bad_cuts),
+        if st.button(f"② 불합격 컷 고치기 ({len(bad_cuts)}컷)", disabled=not (KEYS.get("OPENAI_API_KEY") and bad_cuts),
                      type="primary" if bad_cuts else "secondary"):
             with st.status(f"불합격 {len(bad_cuts)}컷을 고쳐 다시 만드는 중… (컷당 최대 {1 + QC_RETRY}회)") as s:
                 make([(c, qc.fix_prompt(rec[c["id"]].get("prompt") or cutter.still_prompt(c, castdesc, locdesc, [n for n, _ in refs_for(c)], propdesc, look_text(work, c), set(set_loc(work)), prop_texts(work)),
@@ -1660,7 +1710,7 @@ elif cur == "still":
         st.session_state["still_ep_next"] = nxt[0]
         st.rerun()
 
-# ===== 05 영상 =====
+# ===== 06 영상 =====
 elif cur == "clip":
     allcuts = work.get("cuts", {})
     stills = work.get("stills", {})
@@ -1687,11 +1737,17 @@ elif cur == "clip":
         dflt = st.session_state.get("clip_ep", todo[0] if todo else ready[0])
         ep_no = st.selectbox("화", ready, index=ready.index(dflt) if dflt in ready else 0, key="clip_ep",
                              format_func=lambda n: f"EP {n}" + (" ✓" if eps_state.get(str(n), {}).get("clip") == "done" else ""))
-    with c2:
+    cuts = cutter.fix_screens(allcuts[str(ep_no)]["cuts"])   # 화면 글자 컷은 정지 컷 (영상을 만들지 않음)
+    with st.expander("설정 (기본값 그대로 두면 됩니다)"):
         mode = st.selectbox("화질", ["pro", "standard"], format_func=lambda m: {"standard": "720p (시험용)", "pro": "1080p (기본 · 4K 업스케일 대비)"}[m],
                             help="720p로 시험한 테이크를 1080p로 다시 만들면 다른 움직임이 나옵니다. 본편은 처음부터 1080p로 만듭니다.")
-    cuts = cutter.fix_screens(allcuts[str(ep_no)]["cuts"])   # 화면 글자 컷은 정지 컷 (영상을 만들지 않음)
-    all_on = st.checkbox("모든 컷을 영상으로 만들기 (끄면 일부 컷만 영상 · 나머지는 정지 그림에 카메라 움직임)", value=cutter.ALL_MOVE, key="all_move_box")
+        all_on = st.checkbox("모든 컷을 영상으로 만들기 (끄면 일부 컷만 영상 · 나머지는 정지 그림에 카메라 움직임)", value=cutter.ALL_MOVE, key="all_move_box")
+        tk_new = st.radio("말하는 컷", ["omni", "kling"], index=0 if work.get("talk_model", "omni") != "kling" else 1, horizontal=True, key="talk_kind_box",
+                          format_func=lambda k: {"omni": "더빙 음성에 입 맞추기 (OmniHuman 1.5)", "kling": "입만 움직임 (Kling, 음성과 맞지 않음)"}[k])
+    if tk_new != work.get("talk_model", "omni"):
+        work["talk_model"] = tk_new
+        save(work)
+        st.rerun()
     if all_on != cutter.ALL_MOVE:
         work["all_move"] = cutter.ALL_MOVE = all_on
         save(work)
@@ -1756,15 +1812,64 @@ elif cur == "clip":
         return {"pass": False, "items": {"motion": False}, "motion": m,
                 "fails": [{"item": "motion", "reason": qc.MOTION_KO[m["verdict"]], "fix_en": qc.GENERIC_FIX["motion"]}]}
 
+    mouths = work.setdefault("mouth", {}).setdefault(str(ep_no), {})
+
+    def mouth_box(c, still_b):
+        """말하는 사람의 입 위치 (스틸이 바뀌면 다시 찾음). 못 찾으면 None."""
+        pick = srec.get(c["id"], {}).get("pick")
+        m = mouths.get(c["id"])
+        if not m or m.get("pick") != pick:
+            who = (c.get("dialogue") or {}).get("who", "")
+            b = (lipcheck.find_mouth(KEYS["ANTHROPIC_API_KEY"], still_b, f"{who} — {castdesc.get(who, '')}"[:300], MODEL)
+                 if KEYS.get("ANTHROPIC_API_KEY") and still_b else None)
+            m = mouths[c["id"]] = {"pick": pick, "box": list(b) if b else None}
+        return tuple(m["box"]) if m.get("box") else None
+
+    def lip_audio(c):
+        """말하는 컷에 넣는 음성: 앞에 0.1초 무음(편집에서 더빙이 0.1초 뒤에 나옴) + 컷 길이까지 뒷무음. → (음성, 초) 또는 (None, 0)."""
+        dcell = drec0.get(c["id"], {})
+        raw = store.get_bytes(dcell["key"]) if dcell.get("key") else None
+        if not raw:
+            return None, 0
+        want = max(float(c.get("clip_sec") or c["dur"]), float(dcell.get("sec") or 0) + 0.4)
+        return videogen.fit_audio(raw, min_sec=round(want, 2), max_sec=33.0, lead_ms=100), want
+
+    def lip_check(cid, data, still_b):
+        """립싱크 영상의 입이 대사에 맞춰 움직이는지 숫자로 잰다. 크게 어긋났으면 편집에서 음성을 옮길 값(sync_ms)을 남긴다."""
+        c = cutmap[cid]
+        aud, _ = lip_audio(c)
+        if not aud:
+            return None
+        box = mouth_box(c, still_b)
+        r = lipcheck.check_clip(data, aud, box)
+        r["tiny"] = bool(box and (box[2] - box[0]) < 0.11)          # 전신 구도처럼 입이 작게 찍힌 컷: 재기 어려워 불합격으로 치지 않음
+        rec[cid].pop("sync_ms", None)
+        if r.get("verdict") == "ok" and (r.get("corr") or 0) >= 0.6 and abs(r.get("lag_ms") or 0) >= lipcheck.SHIFT_MIN and not r["tiny"]:
+            rec[cid]["sync_ms"] = int(r["lag_ms"])
+        return r
+
     def judge_take(cid, data):
         c = cutmap[cid]
         still = img_bytes(srec.get(cid, {}).get("pick", "")) if srec.get(cid, {}).get("pick") else None
         try:
             if not (AUTO_QC and still):
-                return motion_only(c, data)
-            return qc.judge_clip(KEYS["ANTHROPIC_API_KEY"], data, still, c, rec[cid].get("prompt", ""), MODEL, use_sec=qc.use_seconds(c))
+                q = motion_only(c, data)
+            else:
+                q = qc.judge_clip(KEYS["ANTHROPIC_API_KEY"], data, still, c, rec[cid].get("prompt", ""), MODEL, use_sec=qc.use_seconds(c))
         except Exception as ex:
-            return {"pass": True, "items": {}, "fails": [], "note": f"검수 오류: {str(ex)[:120]}"}
+            q = {"pass": True, "items": {}, "fails": [], "note": f"검수 오류: {str(ex)[:120]}"}
+        if lip(c) and (rec[cid].get("lip_job") or rec[cid].get("manual")):      # 말하는 컷: 입이 대사에 맞춰 움직이는지
+            try:
+                lp = lip_check(cid, data, still)
+            except Exception as ex:
+                lp = {"verdict": "skip", "why": str(ex)[:100]}
+            if lp:
+                q["lip"] = lp
+                if lp.get("verdict") == "none" and lp.get("found_box") and not lp.get("tiny"):
+                    q["pass"] = False
+                    q.setdefault("items", {})["lip"] = False
+                    q.setdefault("fails", []).append({"item": "lip", "reason": f"입이 대사에 맞춰 움직이지 않음 (일치 {lp.get('corr')})", "fix_en": ""})
+        return q
 
     def motion_of(cell) -> dict | None:
         return ((cell.get("qc_by") or {}).get(cell.get("key")) or cell.get("qc") or {}).get("motion")
@@ -1863,12 +1968,10 @@ elif cur == "clip":
             use_lip = lip(c) and bool(dcell.get("key"))
             try:
                 if use_lip:          # 말하는 컷: 스틸 + 더빙 음성 → 음성에 입이 맞는 영상 (길이 = 컷 길이만큼 무음을 붙인 음성)
-                    raw = store.get_bytes(dcell["key"])
-                    if not raw:
+                    aud, want = lip_audio(c)
+                    if not aud:
                         st.error(f"{c['id']}: 더빙 파일을 읽지 못했습니다")
                         continue
-                    want = max(float(c.get("clip_sec") or c["dur"]), float(dcell.get("sec") or 0) + 0.4)
-                    aud = videogen.fit_audio(raw, min_sec=round(want, 2), max_sec=33.0, lead_ms=100)
                     prompt = cutter.talk_prompt(c, castdesc)
                     p = videogen.start_talk(TOKEN, TALK_KIND, prompt, data, aud, int(want + 0.99))
                 else:
@@ -1891,14 +1994,14 @@ elif cur == "clip":
     with c3:
         st.write("")
         if running:
-            if st.button(f"진행 중인 영상 결과 불러오기 ({len(running)}컷)", type="primary", disabled=not TOKEN):
+            if st.button(f"① 진행 중인 영상 결과 불러오기 ({len(running)}컷)", type="primary", disabled=not TOKEN):
                 with st.status("Replicate 결과 확인 중…") as box:
                     collect(running, box)
                     box.update(label="확인 완료", state="complete")
                 st.rerun()
         else:
-            label = f"EP {ep_no} 영상 만들기 ({len(missing)}컷)" if missing else f"EP {ep_no} 영상 완료 · {len(moving)}컷"
-            if st.button(label, type="primary", disabled=not (TOKEN and missing)):
+            label = f"① EP {ep_no} 영상 만들기 ({len(missing)}컷)" if missing else f"EP {ep_no} 영상 완료 · {len(moving)}컷"
+            if st.button(label, type="primary" if missing else "secondary", disabled=not (TOKEN and missing)):
                 with st.status(f"EP {ep_no} 영상 {len(missing)}개 생성 시작…") as box:
                     jobs = launch([(c, rec[c["id"]].get("prompt") if rec.get(c["id"], {}).get("rescan_bad") and rec[c["id"]].get("prompt")
                                     else cutter.video_prompt(c, castdesc)) for c in missing])
@@ -1908,38 +2011,47 @@ elif cur == "clip":
                 st.rerun()
     sec_all = sum(videogen.clip_seconds(c.get("clip_sec") or c["dur"]) for c in moving)
     sec_todo = sum(videogen.clip_seconds(c.get("clip_sec") or c["dur"]) for c in missing)
-    tk_new = st.radio("말하는 컷", ["omni", "kling"], index=0 if TALK_KIND != "kling" else 1, horizontal=True, key="talk_kind_box",
-                      format_func=lambda k: {"omni": "더빙 음성에 입 맞추기 (OmniHuman 1.5)", "kling": "입만 움직임 (Kling, 음성과 맞지 않음)"}[k])
-    if tk_new != TALK_KIND:
-        work["talk_model"] = tk_new
-        save(work)
-        st.rerun()
     n_lip = sum(1 for c in moving if lip(c))
     st.caption(f"확정 스틸을 첫 장면으로 씁니다. 영상 {len(moving)}컷 · 합계 {sec_all}초 (이번에 만들 분량 {len(missing)}컷 · {sec_todo}초), 초 단위로 과금됩니다. "
                f"말이 없는 컷은 {VMODEL}, 말하는 컷 {n_lip}개는 스틸과 더빙 음성으로 입이 맞는 영상을 만듭니다. "
                "화면 글자 컷만 정지 그림으로 둡니다. 버튼 한 번에 한 화만 진행합니다.")
-    if waiting:
-        st.info(f"말하는 컷 {len(waiting)}개({', '.join(c['id'] for c in waiting)})는 더빙 음성이 있어야 만들 수 있습니다. "
-                "06 더빙을 만든 뒤 여기로 돌아와 버튼을 한 번 더 누르면 그 컷들이 만들어집니다.")
     unscanned = [c for c in moving if rec.get(c["id"], {}).get("key") and not motion_of(rec[c["id"]])]
     fb = [c["id"] for c in moving if clip_bad(rec.get(c["id"], {}))]
+    ep_steps(work, ep_no, "clip")
+    if running:
+        guide(f"<b>① 진행 중인 영상 결과 불러오기 ({len(running)}컷)</b> — 만들던 영상을 받아 와서 검수합니다.")
+    elif missing:
+        guide(f"<b>① EP {ep_no} 영상 만들기 ({len(missing)}컷 · {sec_todo}초 분량)</b> — 말 없는 컷과 말하는 컷을 알아서 나눠 만들고 자동으로 검수합니다 (10~20분).")
+    elif waiting:
+        guide(f"말하는 컷 {len(waiting)}개는 더빙 음성이 있어야 만들 수 있습니다. <b>{stage_label('dub')}</b> 를 먼저 만듭니다.")
+        if st.button(f"더빙 만들러 가기 → {stage_label('dub')}", type="primary", key="go_dub_first"):
+            jump("dub", ep_no)
+    elif fb:
+        guide(f"빨간 표시가 뜬 컷 {len(fb)}개({', '.join(fb)})만 아래에서 확인합니다. 컷 아래 <b>이 컷 다시</b> 또는 <b>영상 그대로 쓰기</b>.")
+    else:
+        guide("영상이 모두 준비됐습니다. 아래 노란 버튼으로 다음 단계로 갑니다.", done=True)
+        next_button(work, "clip", ep_no)
+    if waiting and missing:
+        st.info(f"말하는 컷 {len(waiting)}개({', '.join(c['id'] for c in waiting)})는 더빙 음성이 있어야 만들 수 있습니다. "
+                f"{stage_label('dub')} 를 만든 뒤 여기로 돌아와 ① 버튼을 한 번 더 누르면 그 컷들이 만들어집니다.")
     if fb:
         st.warning(f"정지+카메라로 바뀐 컷 {len(fb)}개: {', '.join(fb)} — 이 컷은 완성본에서 영상이 아니라 스틸에 카메라 움직임만 들어갑니다. "
                    "'영상 만들기'로 다시 만들거나, 판정이 틀렸으면 컷 아래 '영상 그대로 쓰기'를 누르세요.")
-    if st.button(f"이 화 영상 움직임 검사{f' (미측정 {len(unscanned)}컷)' if unscanned else ''}", disabled=not any(rec.get(c['id'], {}).get('key') for c in moving),
-                 help="이미 만든 영상에서 인물이 실제로 움직이는지 엔진이 직접 잽니다. 정지화면이거나 카메라만 움직인 컷은 다시 만들 컷으로 표시합니다."):
-        with st.spinner("움직임 재는 중… (컷당 2~5초)"):
-            bad = rescan()
-        st.toast(f"정지화면·카메라만 움직인 컷 {len(bad)}개" + (f": {', '.join(bad)}" if bad else ""))
-        st.rerun()
+    with st.expander("고급 · 이미 만든 영상의 움직임 다시 재기" + (f" (미측정 {len(unscanned)}컷)" if unscanned else "")):
+        if st.button("이 화 영상 움직임 검사", disabled=not any(rec.get(c['id'], {}).get('key') for c in moving),
+                     help="이미 만든 영상에서 인물이 실제로 움직이는지 엔진이 직접 잽니다. 정지화면이거나 카메라만 움직인 컷은 다시 만들 컷으로 표시합니다."):
+            with st.spinner("움직임 재는 중… (컷당 2~5초)"):
+                bad = rescan()
+            st.toast(f"정지화면·카메라만 움직인 컷 {len(bad)}개" + (f": {', '.join(bad)}" if bad else ""))
+            st.rerun()
 
     # ── 콘솔 차선: 다른 곳(Morphic·Higgsfield·AICRON 등)에서 만든 영상을 받아 같은 자리에 넣는다 ──
     # ── 말하는 컷 모델 시험: 같은 스틸·같은 더빙으로 음성에 입을 맞추는 모델을 나란히 본다 ──
-    with st.expander("말하는 컷 모델 시험 (더빙 음성에 입 맞추기 · OmniHuman 1.5 / Wan 2.7)"):
+    with st.expander("고급 · 말하는 컷 모델 시험 (OmniHuman 1.5 / Wan 2.7)"):
         tests = work.setdefault("talk_tests", {}).setdefault(str(ep_no), {})
         cand = [c for c in cuts if cutter.is_talk(c) and srec.get(c["id"], {}).get("pick") and drec0.get(c["id"], {}).get("key")]
         if not cand:
-            st.info("말하는 얼굴 컷 가운데 스틸과 더빙이 모두 있는 컷이 없습니다. 04 콘티 그림과 06 더빙을 먼저 만드세요.")
+            st.info("말하는 얼굴 컷 가운데 스틸과 더빙이 모두 있는 컷이 없습니다. 04 콘티 그림과 05 더빙을 먼저 만드세요.")
         else:
             st.caption("한 컷을 골라 같은 스틸과 같은 더빙 음성을 두 모델에 보냅니다. 결과는 소리와 함께 재생되니 입 모양이 대사와 맞는지 바로 볼 수 있습니다. "
                        "한 번에 두 영상(각 3~6초) 값이 Replicate에서 나갑니다.")
@@ -1947,13 +2059,13 @@ elif cur == "clip":
                               format_func=lambda c: f"{c['id']} · {c['dialogue'].get('who', '')}: {c['dialogue'].get('text', '')[:28]}")
             kinds = st.multiselect("모델", list(videogen.TALK_MODELS), default=list(videogen.TALK_MODELS), key=f"talk_kinds_{ep_no}",
                                    format_func=lambda k: videogen.TALK_MODELS[k]["label"])
-            if st.button(f"{tc['id']} 컷으로 시험하기", type="primary", disabled=not (TOKEN and kinds)):
+            if st.button(f"{tc['id']} 컷으로 시험하기", disabled=not (TOKEN and kinds)):
                 with st.status("말하는 컷 시험 영상 만드는 중… (모델마다 1~5분)") as box:
                     still_b = img_bytes(srec[tc["id"]]["pick"])
                     dsec = float(drec0[tc["id"]].get("sec") or 3)
                     raw = store.get_bytes(drec0[tc["id"]]["key"])
                     if not (still_b and raw):
-                        st.error("이 컷의 스틸이나 더빙 파일을 읽지 못했습니다. 06 더빙에서 이 줄을 다시 만든 뒤 시험하세요.")
+                        st.error("이 컷의 스틸이나 더빙 파일을 읽지 못했습니다. 05 더빙에서 이 줄을 다시 만든 뒤 시험하세요.")
                         st.stop()
                     aud = videogen.fit_audio(raw)
                     pr = cutter.video_prompt(tc, castdesc)
@@ -1999,14 +2111,15 @@ elif cur == "clip":
                                 oc = rec.get(tc["id"], {})
                                 rec[tc["id"]] = {"takes": oc.get("takes", []) + [tr["key"]], "qc_by": oc.get("qc_by", {}), "key": tr["key"],
                                                  "still": srec[tc["id"]]["pick"], "status": "succeeded", "tries": 0, "manual": True,
-                                                 "prompt": cutter.video_prompt(tc, castdesc), "model": videogen.TALK_MODELS[kd]["model"]}
+                                                 "prompt": cutter.video_prompt(tc, castdesc), "model": videogen.TALK_MODELS[kd]["model"],
+                                                 "lipsync": True, "lip_takes": [tr["key"]], "dub_key": drec0.get(tc["id"], {}).get("key")}
                                 finish()
                                 save(work)
                                 st.rerun()
                         else:
                             st.error(f"{tr.get('status')}: {tr.get('error', '')}")
 
-    with st.expander("다른 곳에서 만든 영상 넣기 (Morphic · Higgsfield · AICRON 등)"):
+    with st.expander("고급 · 다른 곳에서 만든 영상 넣기 (Morphic · Higgsfield · AICRON 등)"):
         st.caption("① 꾸러미를 내려받습니다: 컷마다 스틸(첫 장면)·더빙 음성·지시문이 들어 있습니다. ② 바깥 도구에서 스틸로 영상을 만들고, 말하는 컷은 더빙 음성으로 립싱크를 합니다. "
                    "③ 파일 이름을 컷 번호로 시작하게 저장해(예: 1-5.mp4) 한꺼번에 올립니다. 올린 영상은 엔진이 검수하고 편집에 씁니다.")
         import io as _io, re as _re, zipfile as _zip
@@ -2049,7 +2162,7 @@ elif cur == "clip":
             if miss_names:
                 st.warning("컷 번호를 못 찾은 파일: " + ", ".join(miss_names) + " — 이름을 '1-5.mp4'처럼 바꿔 다시 올려 주세요.")
             okf = [(f, cid) for f, cid in found if cid]
-            if st.button(f"올린 영상 {len(okf)}개 넣기", type="primary", disabled=not okf):
+            if st.button(f"올린 영상 {len(okf)}개 넣기", type="primary" if okf else "secondary", disabled=not okf):
                 with st.status("올린 영상 저장·검수 중…") as box:
                     for f, cid in okf:
                         data = f.getvalue()
@@ -2061,7 +2174,8 @@ elif cur == "clip":
                         old_cell = rec.get(cid, {})
                         rec[cid] = {"takes": old_cell.get("takes", []) + [k], "qc_by": old_cell.get("qc_by", {}), "key": k,
                                     "still": srec.get(cid, {}).get("pick"), "status": "succeeded", "tries": 0, "manual": True,
-                                    "prompt": cutter.video_prompt(c, castdesc), "model": "직접 올림"}
+                                    "prompt": cutter.video_prompt(c, castdesc), "model": "직접 올림",
+                                    "lipsync": bool(c.get("talk")), "lip_takes": [k] if c.get("talk") else []}
                         box.update(label=f"{cid} 검수 중…")
                         q = judge_take(cid, data)
                         rec[cid]["qc"] = q
@@ -2132,7 +2246,7 @@ elif cur == "clip":
         st.session_state["clip_ep_next"] = nxt[0]
         st.rerun()
 
-# ===== 06 더빙 =====
+# ===== 05 더빙 =====
 elif cur == "dub":
     allcuts = work.get("cuts", {})
     dubs = work.setdefault("dubs", {})
@@ -2192,7 +2306,7 @@ elif cur == "dub":
 
     # ── 목소리 배정 (작품당 한 번) ──
     no_voice = [w for w in whos if not vmap.get(w, {}).get("id")]
-    with st.expander(f"목소리 배정 · {sum(1 for w in speakers if vmap.get(w, {}).get('id'))} / {len(speakers)}명"
+    with st.expander(f"① 목소리 배정 · {sum(1 for w in speakers if vmap.get(w, {}).get('id'))} / {len(speakers)}명"
                      + (f" · 이 화에 필요한 {len(no_voice)}명 미배정" if no_voice else ""), expanded=bool(no_voice)):
         st.markdown("<div class='small'>인물마다 목소리 하나를 고르면 100화 내내 그 목소리로 만듭니다. 목록은 ElevenLabs 계정에서 쓸 수 있는 목소리입니다. "
                     "한국어 목소리가 적으면 ElevenLabs 의 Voice Library 에서 한국어 목소리를 'Add' 한 뒤 '목록 새로 받기'를 누르세요.</div>", unsafe_allow_html=True)
@@ -2279,8 +2393,8 @@ elif cur == "dub":
 
     with d3:
         st.write("")
-        lab = f"EP {ep_no} 더빙 만들기 ({len(missing_d)}줄)" if missing_d else (f"EP {ep_no} 더빙 완료 · {len(lines)}줄" if lines else f"EP {ep_no} 대사 없음")
-        if st.button(lab, type="primary", disabled=not (EKEY and missing_d)):
+        lab = f"② EP {ep_no} 더빙 만들기 ({len(missing_d)}줄)" if missing_d else (f"EP {ep_no} 더빙 완료 · {len(lines)}줄" if lines else f"EP {ep_no} 대사 없음")
+        if st.button(lab, type="primary" if missing_d else "secondary", disabled=not (EKEY and missing_d)):
             with st.status(f"EP {ep_no} 대사 {len(missing_d)}줄 생성 · 받아 적기 검수 중… (3줄씩 동시)") as s_:
                 make_dub(missing_d)
                 finish_d()
@@ -2288,6 +2402,14 @@ elif cur == "dub":
             st.rerun()
     if not lines and eps_state.get(str(ep_no), {}).get("dub") != "done":
         finish_d()
+    ep_steps(work, ep_no, "dub")
+    if no_voice:
+        guide(f"<b>① 목소리 배정</b> — 이 화에 나오는 {len(no_voice)}명({', '.join(no_voice[:4])})의 목소리를 위 '목소리 배정' 칸에서 고릅니다. 작품당 한 번만 합니다.")
+    elif missing_d:
+        guide(f"<b>② EP {ep_no} 더빙 만들기 ({len(missing_d)}줄)</b> — 대사를 목소리로 만들고 받아 적어 검수합니다.")
+    else:
+        guide("더빙이 끝났습니다. 아래 노란 버튼으로 다음 단계로 갑니다.", done=True)
+        next_button(work, "dub", ep_no)
     if no_voice:
         st.markdown(f"<span class='tag fix'>목소리 미배정</span> <span class='small'>{' · '.join(no_voice)} — 위 '목소리 배정'에서 고르면 그 인물의 대사를 만듭니다.</span>", unsafe_allow_html=True)
     total = sum(max(c["dur"], rec.get(c["id"], {}).get("sec", 0) + 0.2 if c.get("dialogue") else 0) for c in cuts)
@@ -2377,7 +2499,8 @@ else:
                                        bool(crec.get(c["id"], {}).get("fallback")) and not crec.get(c["id"], {}).get("qc_ok"),
                                        (((crec.get(c["id"], {}).get("qc_by") or {}).get(crec.get(c["id"], {}).get("key")) or {}).get("motion") or {}).get("start")] for c in cuts}),
                  json.dumps(sub.get("lines", {}), ensure_ascii=False, sort_keys=True), hook, str(work.get("edit_en", True)),
-                 "edit-v2" if any(crec.get(c["id"], {}).get("lipsync") for c in cuts) else ""]   # 립싱크 컷의 편집 방식이 바뀜(v1.4.2) → 다시 렌더링
+                 json.dumps({c["id"]: crec.get(c["id"], {}).get("sync_ms") for c in cuts if crec.get(c["id"], {}).get("sync_ms")}),
+                 "edit-v3"]          # 편집 방식이 바뀌면 올린다 (v1.5: 화면 합성 · 립싱크 처리 · 완성본 검수) → 다시 렌더링할 화로 표시
         return hashlib.md5("|".join(parts).encode()).hexdigest()[:12]
 
     fin = finals.get(k, {})
@@ -2392,11 +2515,20 @@ else:
         with x2:
             st.write("")
             need = not sub.get("lines") or subs_stale()
-            if st.button(f"EP {ep_no} 영어 자막 만들기" if need else f"EP {ep_no} 자막 완료 · {len(lines)}줄", type="primary",
+            if st.button(f"① EP {ep_no} 영어 자막 만들기" if need else f"EP {ep_no} 자막 완료 · {len(lines)}줄", type="primary" if need else "secondary",
                          disabled=not (KEYS.get("ANTHROPIC_API_KEY") and need)):
                 with st.spinner("영어 자막을 쓰는 중… (10~20초)"):
                     make_subs()
                 st.rerun()
+        ep_steps(work, ep_no, "sub")
+        if need:
+            guide(f"<b>① EP {ep_no} 영어 자막 만들기</b> — 10~20초 걸립니다. 건너뛰어도 08 편집에서 자동으로 만들어집니다.")
+        else:
+            guide("자막이 준비됐습니다. 아래 노란 버튼으로 다음 단계로 갑니다.", done=True)
+            if eps_state.get(k, {}).get("sub") != "done":
+                eps_state.setdefault(k, {})["sub"] = "done"
+                save(work)
+            next_button(work, "sub", ep_no)
         st.caption("한국어 자막은 콘티의 대사 그대로입니다. 영어 자막은 Claude 가 구어체로 옮깁니다. 자막 시각은 08 편집에서 더빙 길이에 맞춰 자동으로 잡힙니다. "
                    "효과음·배경 음악은 아직 넣지 않습니다 (다음 버전).")
         if subs_stale() and sub.get("lines"):
@@ -2416,6 +2548,51 @@ else:
 
     # ── 08 편집 ──
     elif cur == "edit":
+        def final_report(mp4: bytes, tl_: list) -> list:
+            """완성본을 엔진이 직접 본다: 사람이 봐야 할 컷만 골라 낸다. → [{'id','level'(fix|todo),'text','start','dur','go'}]"""
+            import os as _os, tempfile as _tf
+            out = []
+            mouths = work.setdefault("mouth", {}).setdefault(k, {})
+            castd = {n_: (v_.get("prompt_en", "") or n_).split(".")[0] for n_, v_ in (work.get("cast") or {}).items()}
+            with _tf.TemporaryDirectory() as td_:
+                fp = _os.path.join(td_, "final.mp4")
+                open(fp, "wb").write(mp4)
+                for c, seg in zip(cuts, tl_):
+                    cell = crec.get(c["id"]) or {}
+                    base = {"id": c["id"], "start": round(seg["start"], 2), "dur": round(seg["dur"], 2)}
+                    dlg = c.get("dialogue") or {}
+                    has_dub = bool(drec.get(c["id"], {}).get("key"))
+                    talk = cutter.is_talk(c)
+                    if c["motion"] != "still" and seg.get("kind") != "clip":
+                        out.append({**base, "level": "fix", "go": "clip",
+                                    "text": "영상이 없거나 검수 불합격이라 정지 그림으로 들어감"})
+                    elif talk and has_dub and not seg.get("lipsync"):
+                        out.append({**base, "level": "fix", "go": "clip", "text": "말하는 컷인데 립싱크 영상이 아님 (입이 대사와 맞지 않음)"})
+                    elif talk and has_dub:
+                        m = mouths.get(c["id"]) or {}
+                        pick = srec.get(c["id"], {}).get("pick")
+                        if m.get("pick") != pick:
+                            sb_ = img_bytes(pick) if pick else None
+                            b_ = (lipcheck.find_mouth(KEYS["ANTHROPIC_API_KEY"], sb_, f"{dlg.get('who', '')} — {castd.get(dlg.get('who', ''), '')}"[:300], MODEL)
+                                  if KEYS.get("ANTHROPIC_API_KEY") and sb_ else None)
+                            m = mouths[c["id"]] = {"pick": pick, "box": list(b_) if b_ else None}
+                        box = tuple(m["box"]) if m.get("box") else None
+                        r = lipcheck.check_segment(fp, seg["start"], seg["dur"], box)
+                        tiny = bool(box and (box[2] - box[0]) < 0.11)
+                        if r.get("verdict") == "none" and box and not tiny:
+                            out.append({**base, "level": "fix", "go": "clip", "lip": r, "text": f"입이 대사에 맞춰 움직이지 않음 (일치 {r.get('corr')})"})
+                        elif r.get("verdict") in ("weak", "none") and box:
+                            out.append({**base, "level": "todo", "go": "clip", "lip": r,
+                                        "text": f"입과 소리가 약하게 맞음 (일치 {r.get('corr')}) — 이 컷만 들어 보세요"})
+                    if dlg.get("text") and not has_dub:
+                        out.append({**base, "level": "todo", "go": "dub", "text": "더빙이 없어 자막만 나옴"})
+                    if seg.get("kind") == "clip" and (seg.get("frozen") or 0) >= 0.8:
+                        out.append({**base, "level": "todo", "go": "clip", "text": f"마지막 장면이 {seg['frozen']}초 멈춰 있음"})
+                    if c.get("screen_text") and seg.get("kind") != "clip" and seg.get("screen") != "quad":
+                        out.append({**base, "level": "todo", "go": "still",
+                                    "text": "화면의 네 모서리를 찾지 못해 글자만 얹음 — 화면이 정면으로 크게 보이는 스틸로 다시 만들면 해결"})
+            return out
+
         miss_s = [c["id"] for c in cuts if not srec.get(c["id"], {}).get("pick")]
         miss_d = [c["id"] for c in lines if not drec.get(c["id"], {}).get("key")]
         with x2:
@@ -2429,7 +2606,7 @@ else:
             with o2:
                 st.write("")
                 has = bool(fin.get("key")) and not stale_f
-                if st.button(f"EP {ep_no} 편집 완료 · 다시 렌더링" if has else f"EP {ep_no} 편집 · 렌더링 ({len(cuts)}컷)", type="secondary" if has else "primary",
+                if st.button(f"EP {ep_no} 편집 완료 · 다시 렌더링" if has else f"① EP {ep_no} 편집 · 렌더링 ({len(cuts)}컷)", type="secondary" if has else "primary",
                              disabled=bool(miss_s)):
                     with st.status(f"EP {ep_no} 렌더링 중… ({len(cuts)}컷, 2~5분)") as s_:
                         if en_on and (not sub.get("lines") or subs_stale()) and KEYS.get("ANTHROPIC_API_KEY") and lines:
@@ -2438,22 +2615,31 @@ else:
                         boxes = work.setdefault("screen_box", {}).setdefault(k, {})
 
                         def screen_box(c, still):
+                            """화면의 네 모서리(찾으면 화면 전체를 그려 붙임). 못 찾으면 사각형, 그것도 없으면 None."""
                             pick = srec[c["id"]]["pick"]
-                            if boxes.get(c["id"], {}).get("pick") != pick:      # 스틸이 바뀌면 화면 위치를 다시 찾는다
-                                b = editor.find_screen(KEYS["ANTHROPIC_API_KEY"], still, MODEL) if KEYS.get("ANTHROPIC_API_KEY") else None
-                                boxes[c["id"]] = {"pick": pick, "box": list(b) if b else None}
-                            b = boxes[c["id"]]["box"]
-                            return tuple(b) if b else None
+                            e = boxes.get(c["id"], {})
+                            if e.get("pick") != pick or "quad" not in e:        # 스틸이 바뀌면 화면 위치를 다시 찾는다
+                                has = bool(KEYS.get("ANTHROPIC_API_KEY"))
+                                q = editor.find_screen_quad(KEYS["ANTHROPIC_API_KEY"], still, MODEL) if has else None
+                                b = None if q else (editor.find_screen(KEYS["ANTHROPIC_API_KEY"], still, MODEL) if has else None)
+                                e = boxes[c["id"]] = {"pick": pick, "quad": q["quad"] if q else None, "kind": q["kind"] if q else None,
+                                                      "box": list(b) if b else None}
+                            if e.get("quad"):
+                                return {"quad": e["quad"], "kind": e.get("kind") or "phone"}
+                            return tuple(e["box"]) if e.get("box") else None
                         try:
                             mp4, tl = editor.render_episode(cuts, img_bytes, srec, crec, drec, sub, hook=hook, english=en_on, screen_box=screen_box,
                                                             on_step=lambda i, n, cid: s_.update(label=f"컷 {i + 1}/{n} ({cid}) 렌더링 중…"))
                         except Exception as ex:
                             st.error(f"렌더링 실패: {ex}")
                             st.stop()
+                        s_.update(label="완성본 자동 검수 중…")
+                        report = final_report(mp4, tl)
                         fk = f"works/{work['id']}/final/ep{ep_no:03d}_{uuid.uuid4().hex[:6]}.mp4"
                         store.put_bytes(fk, mp4, "video/mp4")
                         finals[k] = {"key": fk, "sig": edit_sig(), "sec": round(tl[-1]["start"] + tl[-1]["dur"], 1), "mb": round(len(mp4) / 1e6, 1),
-                                     "at": now(), "takes": (fin.get("takes") or []) + [fk],
+                                     "at": now(), "takes": (fin.get("takes") or []) + [fk], "report": report,
+                                     "tl": [[c["id"], round(seg["start"], 2), round(seg["dur"], 2)] for c, seg in zip(cuts, tl)],
                                      "plan": {c["id"]: {x: seg.get(x) for x in ("kind", "clip_start", "slow", "frozen")} for c, seg in zip(cuts, tl)}}
                         eps_state.setdefault(k, {})["edit"] = "done"
                         eps_state[k]["sub"] = "done"            # 영어 자막 없이 렌더링해도 자막 단계는 끝난 것으로 본다
@@ -2461,6 +2647,14 @@ else:
                         save(work)
                         s_.update(label="렌더링 완료", state="complete")
                     st.rerun()
+        ep_steps(work, ep_no, "edit")
+        if miss_s:
+            guide(f"그림이 없는 컷이 있어 편집할 수 없습니다. <b>{stage_label('still')}</b> 에서 먼저 만듭니다.")
+        elif not has:
+            guide(f"<b>① EP {ep_no} 편집 · 렌더링</b> — 컷을 이어 붙이고 자막·더빙을 얹은 뒤 엔진이 완성본을 직접 검사합니다 (2~5분).")
+        else:
+            guide("완성본이 나왔습니다. 아래 노란 버튼으로 마지막 확인 단계로 갑니다.", done=True)
+            next_button(work, "edit", ep_no)
         if miss_s:
             st.markdown(f"<span class='tag fix'>스틸 없음</span> <span class='small'>{' · '.join(miss_s)} — 04 콘티 그림에서 먼저 만듭니다.</span>", unsafe_allow_html=True)
         if miss_d:
@@ -2497,9 +2691,19 @@ else:
 
     # ── 09 마스터 ──
     else:
+        ep_steps(work, ep_no, "master")
         if not fin.get("key") or stale_f:
-            st.info("08 편집에서 이 화를 렌더링하면 여기에서 완성본을 확인합니다.")
+            guide(f"아직 완성본이 없습니다. <b>{stage_label('edit')}</b> 에서 렌더링하면 여기에서 확인합니다.")
+            if st.button(f"편집하러 가기 → {stage_label('edit')}", type="primary", key="go_edit_first"):
+                jump("edit", ep_no)
         else:
+            _rep = fin.get("report")
+            if eps_state.get(k, {}).get("master") == "done":
+                guide("이 화는 마스터로 확정됐습니다. 완성본을 내려받아 올리면 됩니다.", done=True)
+            elif _rep:
+                guide(f"표시된 컷 {len({r_['id'] for r_ in _rep})}개만 <b>이 컷만 보기</b>로 확인합니다. 괜찮으면 <b>① 확인 완료</b>, 고칠 것이 있으면 <b>고치러 가기</b>.")
+            else:
+                guide("<b>① 확인 완료 · 이 화 마스터 확정</b> — 엔진 검수에서 표시된 컷이 없습니다.")
             m1, m2 = st.columns([1, 2])
             with m1:
                 v = img_bytes(fin["key"])
@@ -2508,11 +2712,39 @@ else:
             with m2:
                 done = eps_state.get(k, {}).get("master") == "done"
                 st.markdown(f"**EP {ep_no} 완성본** · {fin.get('sec')}초 · {fin.get('mb')}MB", unsafe_allow_html=True)
-                st.markdown("<div class='small'>사람이 확인하는 두 번째 지점입니다. 처음부터 끝까지 한 번 보고, 괜찮으면 확정합니다. "
-                            "고칠 컷이 있으면 04·05·06 에서 그 컷만 다시 만든 뒤 08 에서 다시 렌더링합니다.</div>", unsafe_allow_html=True)
+                rep = fin.get("report")
+                if rep is None:
+                    st.markdown("<span class='tag todo'>자동 검수 전</span> <span class='small'>08 편집에서 한 번 더 렌더링하면 엔진이 완성본을 직접 검사합니다.</span>",
+                                unsafe_allow_html=True)
+                elif not rep:
+                    st.markdown("<span class='tag ok'>자동 검수 통과</span> <span class='small'>엔진이 완성본을 검사했고 표시된 컷이 없습니다. "
+                                "입 모양·멈춘 장면·화면 글자를 확인했습니다.</span>", unsafe_allow_html=True)
+                else:
+                    n_fix = sum(1 for r_ in rep if r_["level"] == "fix")
+                    st.markdown(f"<span class='tag fix'>표시된 컷 {len({r_['id'] for r_ in rep})}개</span> "
+                                f"<span class='small'>고쳐야 함 {n_fix} · 확인 권장 {len(rep) - n_fix}. 전체를 다 보지 않고 아래 컷만 보면 됩니다.</span>",
+                                unsafe_allow_html=True)
+                    for i_, r_ in enumerate(rep):
+                        q1, q2 = st.columns([3, 1])
+                        with q1:
+                            st.markdown(f"<span class='tag {'fix' if r_['level'] == 'fix' else 'todo'}'>{r_['id']}</span> "
+                                        f"<span class='small'>{r_['start']:.1f}초 · {r_['text']}</span>", unsafe_allow_html=True)
+                        with q2:
+                            if st.button("이 컷만 보기", key=f"rep_play_{k}_{i_}"):
+                                st.session_state["rep_play"] = (k, r_["start"], r_["start"] + r_["dur"])
+                                st.rerun()
+                    pl_ = st.session_state.get("rep_play")
+                    if pl_ and pl_[0] == k and v:
+                        try:
+                            st.video(v, start_time=float(pl_[1]), end_time=float(pl_[2]), loop=True, autoplay=True)
+                        except Exception:
+                            st.video(v, start_time=int(pl_[1]))
+                    go_ = next((r_["go"] for r_ in rep if r_["level"] == "fix"), None)
+                    if go_ and st.button(f"고치러 가기 → {stage_label(go_)}", key=f"rep_go_{k}"):
+                        jump(go_, ep_no)
                 if v:
                     st.download_button("완성본 내려받기 (mp4)", v, file_name=f"{work['title']}_EP{ep_no:03d}.mp4", mime="video/mp4")
-                if not done and st.button("확인 완료 · 이 화 마스터 확정", type="primary"):
+                if not done and st.button("① 확인 완료 · 이 화 마스터 확정", type="primary"):
                     eps_state.setdefault(k, {})["master"] = "done"
                     save(work)
                     st.rerun()
@@ -2524,4 +2756,4 @@ else:
 st.divider()
 _p = progress(work)
 st.markdown(f"<div class='small'>다음 할 일 · <b>{_p['next']}</b></div>", unsafe_allow_html=True)
-go_bar(_p, key="go_next_bottom")
+go_bar(_p, key="go_next_bottom", primary=False)

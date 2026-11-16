@@ -130,6 +130,130 @@ def draw_screen_text(still: bytes, text: str, box: tuple | None = None) -> bytes
     return buf.getvalue()
 
 
+QUAD_SYSTEM = """사진에서 화면(휴대폰 화면, 노트북·모니터 화면) 하나의 네 모서리를 찾습니다. 화면이 여러 개면 가장 크게 보이는 것.
+화면 유리 부분(테두리 제외)의 네 모서리를, 화면을 바로 세워 봤을 때의 왼쪽 위(tl) · 오른쪽 위(tr) · 오른쪽 아래(br) · 왼쪽 아래(bl) 순서로,
+그림 크기에 대한 비율(0~1)의 [x, y] 로 답합니다. 휴대폰을 비스듬히 들었으면 기울어진 그대로의 모서리를 답합니다.
+kind 는 phone(휴대폰) · laptop(노트북) · monitor(모니터) 중 하나. 화면이 없으면 found false.
+JSON 만 출력: {"found": true, "kind": "phone", "tl": [0.0, 0.0], "tr": [1.0, 0.0], "br": [1.0, 1.0], "bl": [0.0, 1.0]}"""
+
+
+def find_screen_quad(api_key: str, still: bytes, model: str = "") -> dict | None:
+    """스틸에서 화면의 네 모서리와 종류를 찾는다. → {'kind','quad':[[x,y]×4]} 또는 None."""
+    import anthropic
+    from json_repair import repair_json
+    from src.qc import small_jpg
+    try:
+        c = anthropic.Anthropic(api_key=api_key)
+        r = c.messages.create(model=model or DEFAULT_MODEL, max_tokens=300, system=QUAD_SYSTEM, messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(small_jpg(still)).decode()}},
+            {"type": "text", "text": "화면의 네 모서리를 찾아 주세요."}]}])
+        d = json.loads(repair_json("".join(b.text for b in r.content if getattr(b, "type", "") == "text")))
+        if not d.get("found"):
+            return None
+        quad = [[max(0.0, min(1.0, float(d[k][0]))), max(0.0, min(1.0, float(d[k][1])))] for k in ("tl", "tr", "br", "bl")]
+        return {"kind": d.get("kind") if d.get("kind") in ("phone", "laptop", "monitor") else "phone", "quad": quad} if quad_ok(quad) else None
+    except Exception:
+        return None
+
+
+def quad_ok(quad) -> bool:
+    """네 모서리가 볼록한 사각형이고 너무 작지 않은지."""
+    try:
+        pts = [(float(x), float(y)) for x, y in quad]
+        if len(pts) != 4:
+            return False
+        area, sign = 0.0, 0
+        for i in range(4):
+            (x0, y0), (x1, y1), (x2, y2) = pts[i], pts[(i + 1) % 4], pts[(i + 2) % 4]
+            area += x0 * y1 - x1 * y0
+            cr = (x1 - x0) * (y2 - y1) - (y1 - y0) * (x2 - x1)
+            if abs(cr) < 1e-6:
+                return False
+            if sign == 0:
+                sign = 1 if cr > 0 else -1
+            elif (cr > 0) != (sign > 0):
+                return False
+        return abs(area) / 2 >= 0.01
+    except Exception:
+        return False
+
+
+def _persp(dst, src):
+    """PIL PERSPECTIVE 계수: 결과 그림의 점 dst → 원본(화면 그림)의 점 src."""
+    import numpy as np
+    a, b = [], []
+    for (x, y), (u, v) in zip(dst, src):
+        a.append([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.append(u)
+        a.append([0, 0, 0, x, y, 1, -v * x, -v * y]); b.append(v)
+    return [float(v) for v in np.linalg.solve(np.array(a, dtype="float64"), np.array(b, dtype="float64"))]
+
+
+def screen_ui(text: str, kind: str, w: int, h: int):
+    """화면에 띄울 그림을 엔진이 직접 그린다 (한글이 깨지지 않게). 휴대폰 + 짧은 글 = 전화 수신 화면, 휴대폰 + 긴 글 = 알림,
+    노트북·모니터 = 문서 창."""
+    from PIL import Image, ImageDraw
+    parts = [p.strip() for p in str(text).replace("\\n", "\n").split("\n") if p.strip()] or [str(text).strip() or " "]
+    im = Image.new("RGB", (w, h), (12, 14, 20))
+    d = ImageDraw.Draw(im)
+    if kind == "phone" and len(parts) == 1 and len(parts[0]) <= 10:          # 전화 수신 화면
+        for y in range(h):                                                     # 위에서 아래로 어두워지는 바탕
+            t = y / h
+            d.line([(0, y), (w, y)], fill=(int(34 - 18 * t), int(40 - 22 * t), int(58 - 30 * t)))
+        f_s, f_n = font(int(w * 0.075)), font(min(int(w * 0.8 / max(len(parts[0]), 2)), int(w * 0.2)))
+        lab = "전화 수신 중"
+        d.text(((w - d.textlength(lab, font=f_s)) / 2, h * 0.14), lab, font=f_s, fill=(170, 176, 190))
+        d.text(((w - d.textlength(parts[0], font=f_n)) / 2, h * 0.21), parts[0], font=f_n, fill=(248, 248, 250))
+        r = int(w * 0.105)
+        for cx, col in ((w * 0.27, (232, 64, 60)), (w * 0.73, (52, 199, 89))):   # 거절 · 수락 버튼
+            d.ellipse([cx - r, h * 0.80 - r, cx + r, h * 0.80 + r], fill=col)
+            d.rounded_rectangle([cx - r * 0.5, h * 0.80 - r * 0.14, cx + r * 0.5, h * 0.80 + r * 0.14], radius=int(r * 0.14), fill=(255, 255, 255))
+    elif kind == "phone":                                                      # 알림 · 메시지
+        d.rectangle([0, 0, w, h], fill=(18, 20, 28))
+        f = font(int(w * 0.07))
+        lines = [ln for p_ in parts for ln in wrap(p_, f, int(w * 0.76), d)][:8]
+        bh = int(len(lines) * w * 0.095 + w * 0.1)
+        d.rounded_rectangle([w * 0.07, h * 0.2, w * 0.93, h * 0.2 + bh], radius=int(w * 0.05), fill=(44, 48, 60))
+        y = h * 0.2 + w * 0.05
+        for ln in lines:
+            d.text((w * 0.12, y), ln, font=f, fill=(244, 244, 246))
+            y += w * 0.095
+    else:                                                                      # 문서 창
+        d.rectangle([0, 0, w, h], fill=(250, 250, 252))
+        d.rectangle([0, 0, w, int(h * 0.09)], fill=(226, 229, 236))
+        for i, col in enumerate(((236, 106, 94), (244, 191, 79), (98, 197, 84))):
+            d.ellipse([w * (0.02 + i * 0.028), h * 0.028, w * (0.04 + i * 0.028), h * 0.028 + w * 0.02], fill=col)
+        size = int(min(h * 0.62 / (len(parts) * 1.5), w * 0.8 / max(len(max(parts, key=len)), 2), h * 0.16))
+        f = font(max(14, size))
+        lines = [ln for p_ in parts for ln in wrap(p_, f, int(w * 0.84), d)]
+        y = h * 0.09 + (h * 0.91 - len(lines) * size * 1.5) / 2
+        for ln in lines:
+            d.text(((w - d.textlength(ln, font=f)) / 2, y), ln, font=f, fill=(28, 30, 36))
+            y += size * 1.5
+    return im
+
+
+def draw_screen_ui(still: bytes, text: str, quad, kind: str = "phone") -> bytes:
+    """화면 글자 컷: 엔진이 그린 화면을 스틸 속 화면의 네 모서리에 맞춰 기울여 붙인다. quad = [[x,y]×4] (0~1, tl·tr·br·bl)."""
+    from PIL import Image, ImageDraw, ImageFilter
+    im = Image.open(io.BytesIO(still)).convert("RGB")
+    pts = [(x * im.width, y * im.height) for x, y in quad]
+    import math
+    wt, wb = math.dist(pts[0], pts[1]), math.dist(pts[3], pts[2])
+    hl, hr = math.dist(pts[0], pts[3]), math.dist(pts[1], pts[2])
+    uw = 720
+    uh = max(240, min(1800, int(uw * ((hl + hr) / 2) / max(1.0, (wt + wb) / 2))))
+    ui = screen_ui(text, kind, uw, uh)
+    co = _persp(pts, [(0, 0), (uw, 0), (uw, uh), (0, uh)])
+    warped = ui.transform(im.size, Image.PERSPECTIVE, co, Image.BICUBIC)
+    mask = Image.new("L", im.size, 0)
+    ImageDraw.Draw(mask).polygon(pts, fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(1.2))
+    im.paste(warped, (0, 0), mask)
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=93)
+    return buf.getvalue()
+
+
 SCREEN_SYSTEM = """사진에서 화면(휴대폰 화면, 노트북·모니터 화면) 하나의 위치를 찾습니다. 화면이 여러 개면 가장 크게 보이는 것.
 화면 유리 부분만(테두리 제외) 감싸는 사각형을 그림 크기에 대한 비율(0~1)로 답합니다. 화면이 없으면 found false.
 JSON 만 출력: {"found": true, "x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}"""
@@ -223,7 +347,7 @@ def probe_len(path: str) -> float:
 
 def render_cut(out_path: str, dur: float, still: bytes | None = None, clip: bytes | None = None, camera: str = "고정",
                overlay: bytes | None = None, audio: bytes | None = None, workdir: str = "", clip_start: float = 0.0,
-               sync: bool = False) -> dict:
+               sync: bool = False, audio_delay: int = 100) -> dict:
     """컷 하나를 1080x1920 mp4 로. clip 이 있으면 영상 컷, 없으면 still 정지 컷. → 영상 컷이면 clip_plan 결과."""
     d = workdir or os.path.dirname(out_path)
     n = max(1, int(round(dur * FPS)))
@@ -257,7 +381,8 @@ def render_cut(out_path: str, dur: float, still: bytes | None = None, clip: byte
         au = os.path.join(d, "a.mp3")
         open(au, "wb").write(audio)
         args += ["-i", au]
-        fc.append(f"[{idx}:a]aresample=44100,adelay=100|100,apad[a]")
+        ad = max(0, min(700, int(audio_delay)))
+        fc.append(f"[{idx}:a]aresample=44100,adelay={ad}|{ad},apad[a]")
     else:
         args += ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
         fc.append(f"[{idx}:a]anull[a]")
@@ -297,7 +422,13 @@ def render_episode(cuts: list, get, stills: dict, clips: dict, dub: dict, subs: 
             if not use_clip and not still:
                 raise RuntimeError(f"{c['id']}: 스틸이 없습니다")
             if not use_clip and c.get("screen_text"):
-                still = draw_screen_text(still, c["screen_text"], screen_box(c, still) if screen_box else None)
+                sb = screen_box(c, still) if screen_box else None
+                if isinstance(sb, dict) and sb.get("quad"):                    # 네 모서리를 찾았으면 화면 전체를 그려 붙인다
+                    still = draw_screen_ui(still, c["screen_text"], sb["quad"], sb.get("kind", "phone"))
+                    seg["screen"] = "quad"
+                else:
+                    still = draw_screen_text(still, c["screen_text"], tuple(sb) if sb else None)
+                    seg["screen"] = "box" if sb else "none"
             d = c.get("dialogue") or {}
             ko = d.get("text", "")
             en = (subs.get("lines") or {}).get(c["id"], "") if english and ko else ""
@@ -310,7 +441,11 @@ def render_episode(cuts: list, get, stills: dict, clips: dict, dub: dict, subs: 
             plan = render_cut(out, seg["dur"], still=None if use_clip else still, clip=get(cell["key"]) if use_clip else None,
                               camera=c.get("camera", "고정"), overlay=ov, audio=au, workdir=sub,
                               clip_start=float((q.get("motion") or {}).get("start", 0) or 0),
-                              sync=bool(use_clip and cell.get("lipsync")))
+                              sync=bool(use_clip and cell.get("lipsync")),
+                              # 엔진이 만든 립싱크 영상은 음성 앞에 0.1초 무음을 넣어 보냈고, 바깥에서 만들어 올린 립싱크 영상은 무음 없이 만든 것으로 본다
+                              audio_delay=(0 if use_clip and cell.get("lipsync") and cell.get("manual") else 100)
+                              + (int(cell.get("sync_ms") or 0) if use_clip and cell.get("lipsync") else 0))
+            seg["lipsync"] = bool(use_clip and cell.get("lipsync"))
             seg["kind"] = "clip" if use_clip else "still"
             if plan:
                 seg.update({"clip_start": plan["start"], "slow": plan["slow"], "frozen": plan["frozen"]})
