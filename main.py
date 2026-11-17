@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.5.1"
+VERSION = "v1.6"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -385,6 +385,7 @@ def cast_split(work: dict) -> str:
     return f"인물 {a}/{len(chars)} · 장소 {b}/{len(locs)}"
 
 
+AUTO_FIX_ROUNDS = 2      # 완성본 검수에서 걸린 컷을 엔진이 스스로 다시 만드는 횟수 (화당)
 EP_STAGES = ["cut", "still", "dub", "clip", "sub", "edit", "master"]      # 더빙 → 영상 순서 (v1.5)
 EP_W = {"cut": 5, "still": 20, "clip": 30, "dub": 10, "sub": 10, "edit": 15, "master": 10}   # 한 화 안에서 작업량 비중(%)
 BINGE = 7                                                                                      # 몰아보기 한 편 = 7화
@@ -484,7 +485,7 @@ def jump(k: str, ep: int | None = None):
     """다음 실행에서 단계(와 화)를 바꿔 띄운다. 위젯이 그려지기 전에 적용된다."""
     st.session_state["stage_jump"] = stage_label(k)
     if ep:
-        st.session_state[{"cut": "cut_ep_next", "still": "still_ep_next", "clip": "clip_ep_next"}.get(k, "_ep")] = ep
+        st.session_state[{"cut": "cut_ep_next", "still": "still_ep_next", "clip": "clip_ep_next"}.get(k, f"{k}_ep_next")] = ep
     st.rerun()
 
 
@@ -1806,7 +1807,10 @@ elif cur == "clip":
     waiting = [c for c in moving if lip(c) and not drec0.get(c["id"], {}).get("key") and not rec.get(c["id"], {}).get("key")]   # 더빙이 아직 없는 말하는 컷
     wait_ids = {c["id"] for c in waiting}
     missing = [c for c in moving if c["id"] not in wait_ids
-               and (not rec.get(c["id"], {}).get("key") or stale(c) or relip(c) or rec.get(c["id"], {}).get("rescan_bad"))]
+               and (not rec.get(c["id"], {}).get("key") or stale(c) or relip(c) or rec.get(c["id"], {}).get("rescan_bad")
+                    or rec.get(c["id"], {}).get("redo"))]          # redo = 사람이나 완성본 검수가 '다시 만들기'로 표시한 컷
+    chain = st.session_state.get("auto_fix") or {}
+    chain_here = chain.get("ep") == ep_no and chain.get("stage") == "clip"      # 09·08 에서 넘어온 자동 고치기: 영상 → 편집 → 확인
     running = {cid: r["get"] for cid, r in rec.items() if r.get("get") and r.get("status") not in videogen.DONE}
 
     cutmap = {c["id"]: c for c in cuts}
@@ -1816,7 +1820,7 @@ elif cur == "clip":
 
     def finish():
         ok = all(rec.get(c["id"], {}).get("key") and not stale(c) and not relip(c) and not rec[c["id"]].get("rescan_bad")
-                 for c in moving if c["id"] not in wait_ids)
+                 and not rec[c["id"]].get("redo") for c in moving if c["id"] not in wait_ids)
         e_s = eps_state.setdefault(str(ep_no), {})
         e_s["clip"] = "done" if ok else "doing"
         e_s["clip_qc"] = sum(1 for c in moving if clip_bad(rec.get(c["id"], {})))
@@ -2011,22 +2015,34 @@ elif cur == "clip":
 
     with c3:
         st.write("")
+        auto_make = bool(st.session_state.pop("run_make", False))
         if running:
-            if st.button(f"① 진행 중인 영상 결과 불러오기 ({len(running)}컷)", type="primary", disabled=not TOKEN):
+            if st.button(f"① 진행 중인 영상 결과 불러오기 ({len(running)}컷)", type="primary", disabled=not TOKEN) or (chain_here and TOKEN):
                 with st.status("Replicate 결과 확인 중…") as box:
                     collect(running, box)
                     box.update(label="확인 완료", state="complete")
                 st.rerun()
         else:
             label = f"① EP {ep_no} 영상 만들기 ({len(missing)}컷)" if missing else f"EP {ep_no} 영상 완료 · {len(moving)}컷"
-            if st.button(label, type="primary" if missing else "secondary", disabled=not (TOKEN and missing)):
+            pressed = st.button(label, type="primary" if missing else "secondary", disabled=not (TOKEN and missing))
+            if (pressed or auto_make or chain_here) and TOKEN and missing:
                 with st.status(f"EP {ep_no} 영상 {len(missing)}개 생성 시작…") as box:
                     jobs = launch([(c, rec[c["id"]].get("prompt") if rec.get(c["id"], {}).get("rescan_bad") and rec[c["id"]].get("prompt")
                                     else cutter.video_prompt(c, castdesc)) for c in missing])
                     if jobs:
                         collect(jobs, box)
+                    for c in missing:                        # 만들지 못한 컷에 표시가 남아 자동 고치기가 끝없이 돌지 않게
+                        rec.get(c["id"], {}).pop("redo", None)
+                    finish()
+                    save(work)
                     box.update(label="생성 끝", state="complete")
+                if chain_here:                               # 자동 고치기: 이어서 편집으로
+                    st.session_state["auto_fix"] = {**chain, "stage": "edit"}
+                    jump("edit", ep_no)
                 st.rerun()
+            elif chain_here:                                 # 다시 만들 컷이 없으면 바로 편집으로
+                st.session_state["auto_fix"] = {**chain, "stage": "edit"}
+                jump("edit", ep_no)
     sec_all = sum(videogen.clip_seconds(c.get("clip_sec") or c["dur"]) for c in moving)
     sec_todo = sum(videogen.clip_seconds(c.get("clip_sec") or c["dur"]) for c in missing)
     n_lip = sum(1 for c in moving if lip(c))
@@ -2049,6 +2065,23 @@ elif cur == "clip":
     else:
         guide("영상이 모두 준비됐습니다. 아래 노란 버튼으로 다음 단계로 갑니다.", done=True)
         next_button(work, "clip", ep_no)
+    made_ids = [c["id"] for c in moving if rec.get(c["id"], {}).get("key")]
+    if made_ids and not running:
+        r1, r2 = st.columns([3, 1])
+        with r1:
+            pick_redo = st.multiselect("다시 만들 컷 고르기 (마음에 안 드는 컷 번호를 고릅니다)", made_ids, key=f"redo_pick_{ep_no}",
+                                       placeholder="예: 1-7, 1-11")
+        with r2:
+            st.write("")
+            if st.button(f"② 고른 컷 다시 만들기 ({len(pick_redo)}컷)", disabled=not (TOKEN and pick_redo), key="redo_go",
+                         type="primary" if pick_redo and not missing else "secondary"):
+                for cid in pick_redo:
+                    rec[cid]["redo"] = True
+                eps_state.setdefault(str(ep_no), {})["clip"] = "doing"
+                save(work)
+                st.session_state.pop(f"redo_pick_{ep_no}", None)
+                st.session_state["run_make"] = True
+                st.rerun()
     if waiting and missing:
         st.info(f"말하는 컷 {len(waiting)}개({', '.join(c['id'] for c in waiting)})는 더빙 음성이 있어야 만들 수 있습니다. "
                 f"{stage_label('dub')} 를 만든 뒤 여기로 돌아와 ① 버튼을 한 번 더 누르면 그 컷들이 만들어집니다.")
@@ -2490,7 +2523,10 @@ else:
     todo_x = [n for n in ready if eps_state.get(str(n), {}).get(cur) != "done"]
     x1, x2 = st.columns([1, 3])
     with x1:
-        ep_no = st.selectbox("화", ready, index=ready.index(todo_x[0]) if todo_x else 0, key=f"{cur}_ep",
+        if f"{cur}_ep_next" in st.session_state:
+            st.session_state[f"{cur}_ep"] = st.session_state.pop(f"{cur}_ep_next")
+        dflt_x = st.session_state.get(f"{cur}_ep", todo_x[0] if todo_x else ready[0])
+        ep_no = st.selectbox("화", ready, index=ready.index(dflt_x) if dflt_x in ready else 0, key=f"{cur}_ep",
                              format_func=lambda n: f"EP {n}" + (" ✓" if eps_state.get(str(n), {}).get(cur) == "done" else ""))
     k = str(ep_no)
     ep = parsed["episodes"][ep_no - 1]
@@ -2624,8 +2660,13 @@ else:
             with o2:
                 st.write("")
                 has = bool(fin.get("key")) and not stale_f
+                chain = st.session_state.get("auto_fix") or {}
+                chain_e = chain.get("ep") == ep_no and chain.get("stage") == "edit"      # 자동 고치기에서 넘어옴: 바로 렌더링
+                if chain_e and miss_s:
+                    st.session_state.pop("auto_fix", None)
+                    chain_e = False
                 if st.button(f"EP {ep_no} 편집 완료 · 다시 렌더링" if has else f"① EP {ep_no} 편집 · 렌더링 ({len(cuts)}컷)", type="secondary" if has else "primary",
-                             disabled=bool(miss_s)):
+                             disabled=bool(miss_s)) or chain_e:
                     with st.status(f"EP {ep_no} 렌더링 중… ({len(cuts)}컷, 2~5분)") as s_:
                         if en_on and (not sub.get("lines") or subs_stale()) and KEYS.get("ANTHROPIC_API_KEY") and lines:
                             s_.update(label="영어 자막을 쓰는 중…")
@@ -2649,6 +2690,7 @@ else:
                             mp4, tl = editor.render_episode(cuts, img_bytes, srec, crec, drec, sub, hook=hook, english=en_on, screen_box=screen_box,
                                                             on_step=lambda i, n, cid: s_.update(label=f"컷 {i + 1}/{n} ({cid}) 렌더링 중…"))
                         except Exception as ex:
+                            st.session_state.pop("auto_fix", None)
                             st.error(f"렌더링 실패: {ex}")
                             st.stop()
                         s_.update(label="완성본 자동 검수 중…")
@@ -2662,8 +2704,25 @@ else:
                         eps_state.setdefault(k, {})["edit"] = "done"
                         eps_state[k]["sub"] = "done"            # 영어 자막 없이 렌더링해도 자막 단계는 끝난 것으로 본다
                         eps_state[k].pop("master", None)
+                        # 완성본 검수에서 '고쳐야 함'으로 나온 영상 컷은 엔진이 스스로 다시 만들고 다시 편집한다 (화당 최대 2번)
+                        rnd = int(chain.get("round", 0)) if chain_e else 0
+                        fix_ids = sorted({r_["id"] for r_ in report if r_["level"] == "fix" and r_.get("go") == "clip"})
+                        auto_next = bool(fix_ids) and rnd < AUTO_FIX_ROUNDS and bool(KEYS.get("REPLICATE_API_TOKEN"))
+                        if auto_next:
+                            for cid in fix_ids:
+                                crec.setdefault(cid, {})["redo"] = True
+                            eps_state[k]["clip"] = "doing"
+                        elif chain_e and chain.get("cuts"):          # 엔진이 스스로 고친 뒤의 완성본이라는 기록
+                            finals[k]["auto"] = {"round": rnd, "cuts": chain["cuts"]}
                         save(work)
-                        s_.update(label="렌더링 완료", state="complete")
+                        s_.update(label="렌더링 완료" + (f" · 표시된 {len(fix_ids)}컷을 자동으로 다시 만듭니다" if auto_next else ""), state="complete")
+                    if auto_next:
+                        st.session_state["auto_fix"] = {"ep": ep_no, "stage": "clip", "round": rnd + 1,
+                                                        "cuts": sorted(set(chain.get("cuts", []) if chain_e else []) | set(fix_ids))}
+                        jump("clip", ep_no)
+                    st.session_state.pop("auto_fix", None)
+                    if chain_e:
+                        jump("master", ep_no)
                     st.rerun()
         ep_steps(work, ep_no, "edit")
         if miss_s:
@@ -2719,9 +2778,11 @@ else:
             if eps_state.get(k, {}).get("master") == "done":
                 guide("이 화는 마스터로 확정됐습니다. 완성본을 내려받아 올리면 됩니다.", done=True)
             elif _rep:
-                guide(f"표시된 컷 {len({r_['id'] for r_ in _rep})}개만 <b>이 컷만 보기</b>로 확인합니다. 괜찮으면 <b>① 확인 완료</b>, 고칠 것이 있으면 <b>고치러 가기</b>.")
+                guide(f"표시된 컷 {len({r_['id'] for r_ in _rep})}개만 <b>이 컷만 보기</b>로 확인합니다. 괜찮으면 <b>① 확인 완료</b>, "
+                      "다시 만들 컷이 있으면 <b>② 고른 컷 다시 만들고 다시 편집</b> (영상·편집·검수가 자동으로 이어집니다).")
             else:
-                guide("<b>① 확인 완료 · 이 화 마스터 확정</b> — 엔진 검수에서 표시된 컷이 없습니다.")
+                guide("<b>① 확인 완료 · 이 화 마스터 확정</b> — 엔진 검수에서 표시된 컷이 없습니다. "
+                      "마음에 안 드는 컷이 있으면 번호를 골라 <b>② 고른 컷 다시 만들고 다시 편집</b>.")
             m1, m2 = st.columns([1, 2])
             with m1:
                 v = img_bytes(fin["key"])
@@ -2757,9 +2818,30 @@ else:
                             st.video(v, start_time=float(pl_[1]), end_time=float(pl_[2]), loop=True, autoplay=True)
                         except Exception:
                             st.video(v, start_time=int(pl_[1]))
-                    go_ = next((r_["go"] for r_ in rep if r_["level"] == "fix"), None)
+                    go_ = next((r_["go"] for r_ in rep if r_["level"] == "fix" and r_.get("go") != "clip"), None)
                     if go_ and st.button(f"고치러 가기 → {stage_label(go_)}", key=f"rep_go_{k}"):
                         jump(go_, ep_no)
+                # 다시 만들 컷: 표시된 컷이 미리 골라져 있고, 표시되지 않은 컷도 고를 수 있다. 버튼 하나로 영상 다시 → 편집 다시 → 여기로 돌아옴
+                vid_ids = [c["id"] for c in cuts if c["motion"] != "still"]
+                flagged = [i for i in dict.fromkeys(r_["id"] for r_ in (rep or []) if r_.get("go") == "clip") if i in vid_ids]
+                m1, m2 = st.columns([3, 1])
+                with m1:
+                    redo_ids = st.multiselect("다시 만들 컷 (표시된 컷이 골라져 있습니다. 다른 컷 번호를 더 고를 수 있습니다)", vid_ids, default=flagged,
+                                              key=f"m_redo_{k}_{fin.get('key', '')[-10:]}", placeholder="예: 1-7, 1-11")
+                with m2:
+                    st.write("")
+                    if st.button(f"② 고른 {len(redo_ids)}컷 다시 만들고 다시 편집", disabled=not (redo_ids and KEYS.get("REPLICATE_API_TOKEN")),
+                                 type="primary" if redo_ids else "secondary", key=f"m_redo_go_{k}",
+                                 help="고른 컷의 영상을 다시 만들고, 이어서 편집·검수까지 자동으로 한 뒤 이 화면으로 돌아옵니다."):
+                        for cid in redo_ids:
+                            crec.setdefault(cid, {})["redo"] = True
+                        eps_state.setdefault(k, {})["clip"] = "doing"
+                        save(work)
+                        st.session_state["auto_fix"] = {"ep": ep_no, "stage": "clip", "round": AUTO_FIX_ROUNDS}   # 사람이 고른 것은 한 번만 돌고 돌아온다
+                        jump("clip", ep_no)
+                au_ = fin.get("auto")
+                if au_:
+                    st.caption(f"이 완성본은 엔진이 검수에서 걸린 컷({', '.join(au_.get('cuts', []))})을 스스로 다시 만든 뒤 편집한 {au_.get('round')}번째 결과입니다.")
                 if v:
                     st.download_button("완성본 내려받기 (mp4)", v, file_name=f"{work['title']}_EP{ep_no:03d}.mp4", mime="video/mp4")
                 if not done and st.button("① 확인 완료 · 이 화 마스터 확정", type="primary"):
