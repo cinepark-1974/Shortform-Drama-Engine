@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.8"
+VERSION = "v1.8.1"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -388,11 +388,11 @@ def cast_split(work: dict) -> str:
 AUTO_FIX_ROUNDS = 3      # 완성본 검수에서 걸린 컷을 엔진이 스스로 고치는 횟수 (화당). 립싱크는 1번 다시 만들고 그래도 안 되면 처리 방식을 바꾼다
 
 
-def apply_mode(work: dict, ep_key: str, c: dict, to: str, why: str = "", auto: bool = False) -> str:
+def apply_mode(work: dict, ep_key: str, c: dict, to: str, why: str = "", auto: bool = False, listener: str = "") -> str:
     """컷 하나의 대사 처리 방식을 바꾸고 그 컷의 영상(구도가 바뀌면 스틸도)을 보관함으로 옮긴다.
     → 다음에 거쳐야 할 단계: 'still'(새 스틸 필요) | 'clip'(영상만 다시) | ''(바뀐 것 없음)"""
     frm = cutter.dlg_mode(c)
-    redraw = cutter.set_mode(c, to, why)
+    redraw = cutter.set_mode(c, to, why, listener)
     if cutter.dlg_mode(c) != to or frm == to:
         return ""
     cid = c["id"]
@@ -1415,12 +1415,23 @@ elif cur == "cut":
                                        label_visibility="collapsed", format_func=lambda x: "실패하면 " + cutter.MODES[x],
                                        disabled=nm_ != "lip")
                 if nm_ != cutter.dlg_mode(c):
-                    apply_mode(work, str(ep_no), c, nm_, "사람이 고름")
+                    apply_mode(work, str(ep_no), c, nm_, "사람이 고름", listener=cutter.pick_listener(cuts, c))
                     save(work)
                     st.rerun()
-                if nm_ == "lip" and fb_ != cutter.lip_fallback(c):
+                if nm_ == "lip" and fb_ != (c["dialogue"].get("fallback") or "back"):
                     c["dialogue"]["fallback"] = fb_
                     save(work)
+            # 처리 방식을 바꾼 컷: 버튼 한 번으로 새 스틸 → 영상 → 편집 → 09 마스터까지 자동
+            changed = [c["id"] for c in dcuts if any(x.get("id") == c["id"] and not x.get("auto")
+                                                     for x in work.get("mode_log", {}).get(str(ep_no), []))
+                       and (not work.get("stills", {}).get(str(ep_no), {}).get(c["id"], {}).get("pick")
+                            or not work.get("clips", {}).get(str(ep_no), {}).get(c["id"], {}).get("key"))]
+            if changed:
+                if st.button(f"② 바꾼 {len(changed)}컷 새로 만들기 (그림 → 영상 → 편집 자동)", type="primary", key=f"mode_go_{ep_no}"):
+                    need_still = any(not work.get("stills", {}).get(str(ep_no), {}).get(x, {}).get("pick") for x in changed)
+                    st.session_state["auto_fix"] = {"ep": ep_no, "stage": "still" if need_still else "clip",
+                                                    "round": AUTO_FIX_ROUNDS - 1, "cuts": changed}
+                    jump("still" if need_still else "clip", ep_no)
         if rec.get("changes"):
             with st.expander(f"감수가 고친 곳 {len(rec['changes'])}건"):
                 for x in rec["changes"]:
@@ -1893,7 +1904,8 @@ elif cur == "clip":
     def convert(cid, why):
         """립싱크가 1번 다시 만들어도 실패한 컷: 같은 방식으로 다시 뽑지 않고 처리 방식을 바꾼다 (뒷모습 → 새 스틸, 속마음 → 영상만)."""
         c = cutmap[cid]
-        nxt = apply_mode(work, str(ep_no), c, cutter.lip_fallback(c), why, auto=True)
+        lis = cutter.pick_listener(cuts, c)
+        nxt = apply_mode(work, str(ep_no), c, cutter.lip_fallback(c, lis), why, auto=True, listener=lis)
         c["talk"] = cutter.is_talk(c)
         if nxt:
             conv[nxt].append(cid)
@@ -2799,6 +2811,7 @@ else:
             """완성본을 엔진이 직접 본다: 사람이 봐야 할 컷만 골라 낸다. → [{'id','level'(fix|todo),'text','start','dur','go'}]"""
             import os as _os, tempfile as _tf
             out = []
+            lipt.clear()
             mouths = work.setdefault("mouth", {}).setdefault(k, {})
             castd = {n_: (v_.get("prompt_en", "") or n_).split(".")[0] for n_, v_ in (work.get("cast") or {}).items()}
             with _tf.TemporaryDirectory() as td_:
@@ -2826,12 +2839,19 @@ else:
                         box = tuple(m["box"]) if m.get("box") else None
                         r = lipcheck.check_segment(fp, seg["start"], seg["dur"], box)
                         tiny = bool(box and (box[2] - box[0]) < 0.11)
+                        lipt.append({"id": c["id"], "mode": "lip", "corr": r.get("corr"), "lag": r.get("lag_ms"), "verdict": r.get("verdict")})
+                        if (r.get("corr") or 0) >= 0.6 and abs(r.get("lag_ms") or 0) >= lipcheck.SHIFT_MIN and seg.get("lipsync"):
+                            # 입은 맞는데 소리와 시각이 어긋남: 다시 만들지 않고 음성 위치만 옮겨 다시 렌더링 (빠른 쪽·늦은 쪽 모두)
+                            cell["sync_ms"] = int(cell.get("sync_ms") or 0) + int(r["lag_ms"])
+                            resync.append(c["id"])
                         if r.get("verdict") == "none" and box and not tiny:
                             out.append({**base, "level": "fix", "go": "clip", "lip": r, "lipfail": True,
                                         "text": f"입이 대사에 맞춰 움직이지 않음 (일치 {r.get('corr')})"})
                         elif r.get("verdict") in ("weak", "none") and box:
                             out.append({**base, "level": "todo", "go": "clip", "lip": r,
                                         "text": f"입과 소리가 약하게 맞음 (일치 {r.get('corr')}) — 이 컷만 들어 보세요"})
+                    if dlg.get("text") and not talk:
+                        lipt.append({"id": c["id"], "mode": cutter.dlg_mode(c), "corr": None, "lag": None, "verdict": "normal"})
                     if dlg.get("text") and not has_dub:
                         out.append({**base, "level": "todo", "go": "dub", "text": "더빙이 없어 자막만 나옴"})
                     if seg.get("kind") == "clip" and (seg.get("frozen") or 0) >= 0.8:
@@ -2841,6 +2861,7 @@ else:
                                     "text": "화면의 네 모서리를 찾지 못해 글자만 얹음 — 화면이 정면으로 크게 보이는 스틸로 다시 만들면 해결"})
             return out
 
+        lipt, resync = [], []          # 완성본 입 검사 표 · 음성 위치를 옮긴 컷 (final_report 가 채움)
         miss_s = [c["id"] for c in cuts if not srec.get(c["id"], {}).get("pick")]
         miss_d = [c["id"] for c in lines if not drec.get(c["id"], {}).get("key")]
         with x2:
@@ -2885,20 +2906,26 @@ else:
                             if e.get("quad"):
                                 return {"quad": e["quad"], "kind": e.get("kind") or "phone"}
                             return tuple(e["box"]) if e.get("box") else None
-                        try:
-                            mp4, tl = editor.render_episode(cuts, img_bytes, srec, crec, drec, sub, hook=hook, english=en_on, screen_box=screen_box,
-                                                            on_step=lambda i, n, cid: s_.update(label=f"컷 {i + 1}/{n} ({cid}) 렌더링 중…" if i < n else "음악·효과음 섞는 중…"),
-                                                            sound=sound_pack())
-                        except Exception as ex:
-                            st.session_state.pop("auto_fix", None)
-                            st.error(f"렌더링 실패: {ex}")
-                            st.stop()
-                        s_.update(label="완성본 자동 검수 중…")
-                        report = final_report(mp4, tl)
+                        pack = sound_pack()
+                        for attempt in range(2):            # 음성 위치만 어긋난 컷이 있으면 옮겨서 한 번 더 렌더링 (영상은 다시 만들지 않음)
+                            resync.clear()
+                            try:
+                                mp4, tl = editor.render_episode(cuts, img_bytes, srec, crec, drec, sub, hook=hook, english=en_on, screen_box=screen_box,
+                                                                on_step=lambda i, n, cid: s_.update(label=f"컷 {i + 1}/{n} ({cid}) 렌더링 중…" if i < n else "음악·효과음 섞는 중…"),
+                                                                sound=pack)
+                            except Exception as ex:
+                                st.session_state.pop("auto_fix", None)
+                                st.error(f"렌더링 실패: {ex}")
+                                st.stop()
+                            s_.update(label="완성본 자동 검수 중…")
+                            report = final_report(mp4, tl)
+                            if not resync or attempt == 1:
+                                break
+                            s_.update(label=f"입과 소리 시각을 맞추는 중 ({', '.join(resync)}) · 다시 렌더링…")
                         fk = f"works/{work['id']}/final/ep{ep_no:03d}_{uuid.uuid4().hex[:6]}.mp4"
                         store.put_bytes(fk, mp4, "video/mp4")
                         finals[k] = {"key": fk, "sig": edit_sig(), "sec": round(tl[-1]["start"] + tl[-1]["dur"], 1), "mb": round(len(mp4) / 1e6, 1),
-                                     "at": now(), "takes": (fin.get("takes") or []) + [fk], "report": report,
+                                     "at": now(), "takes": (fin.get("takes") or []) + [fk], "report": report, "lipt": list(lipt),
                                      "tl": [[c["id"], round(seg["start"], 2), round(seg["dur"], 2)] for c, seg in zip(cuts, tl)],
                                      "plan": {c["id"]: {x: seg.get(x) for x in ("kind", "clip_start", "slow", "frozen")} for c, seg in zip(cuts, tl)}}
                         eps_state.setdefault(k, {})["edit"] = "done"
@@ -2918,7 +2945,9 @@ else:
                                     cell_["lip_fails"] = int(cell_.get("lip_fails", 0)) + 1
                                 if cid in lipbad and cell_["lip_fails"] >= 2:     # 립싱크가 두 번 걸림: 다시 뽑지 않고 처리 방식을 바꾼다
                                     c_ = cmap_[cid]
-                                    if apply_mode(work, k, c_, cutter.lip_fallback(c_), "완성본 검수에서 립싱크 2번 불합격", auto=True) == "still":
+                                    lis_ = cutter.pick_listener(cuts, c_)
+                                    if apply_mode(work, k, c_, cutter.lip_fallback(c_, lis_), "완성본 검수에서 립싱크 2번 불합격", auto=True,
+                                                  listener=lis_) == "still":
                                         next_stage = "still"
                                 else:
                                     cell_["redo"] = True
@@ -3010,6 +3039,13 @@ else:
                     st.markdown("<span class='tag ok'>엔진이 바꾼 컷</span> <span class='small'>"
                                 + " · ".join(f"{x['id']} {cutter.MODES.get(x['from'], x['from'])} → {cutter.MODES.get(x['to'], x['to'])} ({x['why']})"
                                              for x in seen_.values()) + "</span>", unsafe_allow_html=True)
+                if fin.get("lipt"):                        # 대사 컷마다 입 검사 결과: 립싱크 컷만 기준 적용, 나머지는 정상
+                    with st.expander("대사 컷 입 검사 표"):
+                        vk = {"ok": "합격", "weak": "약함", "none": "불합격", "normal": "정상"}
+                        st.table([{"컷": r_["id"], "처리 방식": cutter.MODES.get(r_["mode"], r_["mode"]),
+                                   "일치": "" if r_["corr"] is None else r_["corr"],
+                                   "어긋남(ms)": "" if r_["lag"] is None else f"{r_['lag']:+d}", "판정": vk.get(r_["verdict"], r_["verdict"])}
+                                  for r_ in fin["lipt"]])
                 rep = fin.get("report")
                 if rep is None:
                     st.markdown("<span class='tag todo'>자동 검수 전</span> <span class='small'>08 편집에서 한 번 더 렌더링하면 엔진이 완성본을 직접 검사합니다.</span>",

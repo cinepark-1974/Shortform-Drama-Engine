@@ -71,6 +71,12 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 - "back"(뒷모습): 말하는 사람의 뒤통수·어깨 너머 컷. chars 에 '이름:뒷모습'. 얼굴은 안 보임.
 - "off"(화면 밖·전화): 전화 목소리, 문 너머 목소리, 화면 글자 컷 위의 목소리.
 - 소리 내어 한 대사는 inner 로 처리하지 않음 (속마음이 되면 상대가 그 말을 못 들은 것이 됨). lip·reaction·back·off 중에서 고름.
+- 고르는 기준:
+  · 주인공의 클리프행어·결심·통보 대사 → lip
+  · 주인공이 듣는 쪽인 충격 대사(해고·채용 취소·이별 통보) → reaction. 화면은 듣고 굳는 주인공의 얼굴 (듣는 얼굴이 더 아프다)
+  · 단역의 짧은 질문·안내("성함이요?", "잠시만요") → back 또는 off
+  · 전화 상대의 목소리 → off, dialogue.phone=true. 화면은 전화를 받는 인물의 얼굴
+- reaction·off 컷에는 말하는 사람의 얼굴을 넣지 않음 (입을 다문 얼굴에서 그 사람 목소리가 나오면 어색함).
 - dialogue.fallback: 립싱크가 실패했을 때 엔진이 바꿀 방식. 속마음이어도 되는 대사만 "inner", 나머지는 "back".
 - lip 컷의 구도 고정: MCU 또는 CU, 정면 또는 3/4 측면. 말하는 사람은 그 컷에서 한 명. 손·컵·휴대폰이 입 근처에 없음.
   걷거나 돌아서는 동작 없이 제자리에서 말함. 옆얼굴(측면)·뒤에서·부감으로 말하는 컷 금지.
@@ -126,7 +132,7 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 - 기계를 다루는 동작(카드 찍기, 게이트 열림, 키보드 입력, 버튼 누르기, 화면 터치)은 INSERT 컷으로 따로 뺌.
   그 INSERT 컷의 frame 은 "방문증을 쥔 손이 게이트 리더기 바로 앞에 있다" 같은 정지 상태.
 - 확정형. '살짝·약간·정도·또는·처럼 보·수 있' 금지. 영어는 'slightly·maybe·or' 금지.
-- dialogue: 이 컷에서 들리는 대사 {"who":통일 이름,"text":대사,"mode":"lip|inner|reaction|back|off","fallback":"back|inner"}. 없으면 null.
+- dialogue: 이 컷에서 들리는 대사 {"who":통일 이름,"text":대사,"mode":"lip|inner|reaction|back|off","fallback":"back|inner","phone":전화 목소리면 true}. 없으면 null.
 - screen_text: 휴대폰·모니터·문서에 보이는 글자. 그림에는 글자를 넣지 않고 편집에서 얹으므로 글자만 적음. 없으면 "".
 - chars: 화면에 보이는 인물(통일 이름). 손·뒷모습만 보이면 이름 뒤에 ':손' 또는 ':뒷모습'.
 - loc: 주어진 장소 id. sfx: 효과음 한 단어(없으면 "").
@@ -415,7 +421,8 @@ def normalize(cuts: list, ep: dict, bible: dict | None = None) -> list:
             if md not in MODES:                       # 예전 형식: 입이 보이면 립싱크, 아니면 화면 밖
                 md = "lip" if bool(d.get("on_screen", True)) else "off"
             fb = "inner" if str(d.get("fallback") or "") == "inner" else "back"
-            d = {"who": canon(str(d.get("who", "")), nm), "text": str(d["text"]), "mode": md, "fallback": fb, "on_screen": md == "lip"}
+            d = {"who": canon(str(d.get("who", "")), nm), "text": str(d["text"]), "mode": md, "fallback": fb, "on_screen": md == "lip",
+                 "phone": bool(d.get("phone"))}
         else:
             d = None
         try:
@@ -502,9 +509,33 @@ def _remember(c: dict):
         c["orig"]["chars"] = list(c.get("chars") or [])
 
 
-def set_mode(c: dict, to: str, why: str = "") -> bool:
+def pick_listener(cuts: list, c: dict) -> str:
+    """리액션 컷에 보여 줄 듣는 사람: 이 컷의 다른 얼굴 → 같은 장면에서 가장 많이 나온 다른 얼굴."""
+    spk = _speaker(c)
+    own = [ch for ch in _faces(c) if ch != spk]
+    if own:
+        return own[0]
+    cnt = {}
+    for x in cuts:
+        if x.get("scene") == c.get("scene"):
+            for ch in _faces(x):
+                if ch != spk:
+                    cnt[ch] = cnt.get(ch, 0) + 1
+    return max(cnt, key=cnt.get) if cnt else ""
+
+
+def is_phone(c: dict) -> bool:
+    """전화 목소리 컷 (편집에서 전화기 소리로 깎는다)."""
+    d = c.get("dialogue") or {}
+    if dlg_mode(c) != "off":
+        return False
+    return bool(d.get("phone")) or any(w in (c.get("frame_ko", "") + c.get("action", "")) for w in ("전화", "통화", "수화기"))
+
+
+def set_mode(c: dict, to: str, why: str = "", listener: str = "") -> bool:
     """컷 하나의 대사 처리 방식을 바꾸고 구도를 그 방식에 맞춘다. 스틸을 다시 그려야 하면 True.
     - back: 말하는 사람을 뒷모습으로 (다른 인물이 있으면 어깨 너머 구도). 새 스틸 필요.
+    - reaction(listener 있음): 화면을 듣는 사람의 얼굴로 바꿈. 새 스틸 필요.
     - inner·off·reaction: 입을 다문 얼굴 + 목소리. 스틸은 그대로 쓴다.
     - lip: 보관해 둔 원래 구도로 되돌림 (원래 구도가 다르면 새 스틸 필요)."""
     d = c.get("dialogue")
@@ -542,6 +573,16 @@ def set_mode(c: dict, to: str, why: str = "") -> bool:
                          "and the shoulders are visible, and the face is not visible." + (" The other person faces the camera over that shoulder."
                                                                                            if c["size"] == "OTS" else ""))
         redraw = True
+    elif to == "reaction" and listener and listener != _speaker(c):
+        _remember(c)
+        spk = _speaker(c)
+        c["chars"] = [listener]
+        c["size"], c["angle"] = "MCU", "3/4 측면"
+        c["frame_ko"] = f"{listener}가 말을 듣고 굳은 얼굴로 화면 밖 {spk} 쪽을 본다. 입은 다물고 있다."
+        c["frame_en"] = ("The person in the frame listens in silence with a frozen expression, eyes fixed on someone just off camera; "
+                         "the lips stay closed.")
+        c["motion_ko"], c["motion_en"] = f"{listener}가 한 번 눈을 깜빡이고 침을 삼킨다", "The person blinks once and swallows, lips closed."
+        redraw = True
     elif old == "back" and c.get("orig"):           # 뒷모습에서 다른 방식으로: 원래 구도로 되돌림
         c.update(c.pop("orig"))
         redraw = True
@@ -551,9 +592,11 @@ def set_mode(c: dict, to: str, why: str = "") -> bool:
     return redraw
 
 
-def lip_fallback(c: dict) -> str:
-    """립싱크가 실패한 컷을 바꿀 방식: 속마음이어도 되는 대사만 inner, 나머지는 back."""
-    return "inner" if (c.get("dialogue") or {}).get("fallback") == "inner" else "back"
+def lip_fallback(c: dict, listener: str = "") -> str:
+    """립싱크가 실패한 컷을 바꿀 방식: 속마음이어도 되는 대사만 inner, 듣는 사람이 있으면 reaction, 없으면 back."""
+    if (c.get("dialogue") or {}).get("fallback") == "inner":
+        return "inner"
+    return "reaction" if listener else "back"
 
 
 def enforce_modes(cuts: list) -> list:
@@ -569,6 +612,10 @@ def enforce_modes(cuts: list) -> list:
         if is_screen_cut(c) and md == "lip":
             c["dialogue"]["mode"], c["dialogue"]["on_screen"] = "off", False
             notes.append(f"{c['id']}: 화면 글자 컷의 대사를 화면 밖 목소리로")
+            continue
+        if md in ("reaction", "off") and _speaker(c) in _faces(c):     # 말하는 사람 얼굴이 보이는데 입을 다문 채 목소리: 뒷모습으로
+            set_mode(c, "back", "말하는 사람 얼굴이 보이는 리액션·화면 밖 대사")
+            notes.append(f"{c['id']}: 말하는 사람 얼굴이 보여 뒷모습으로")
             continue
         if md == "lip":
             spk = _speaker(c)
@@ -589,8 +636,9 @@ def enforce_modes(cuts: list) -> list:
         last = cuts[-1]["id"] if cuts else ""
         rank = sorted(lips, key=lambda c: (not c.get("climax"), c["id"] != last, c.get("no", 99) > 3, c.get("no", 99)))
         for c in rank[LIP_MAX:]:
-            to = lip_fallback(c)
-            set_mode(c, to, "화당 립싱크 컷 상한")
+            lis = pick_listener(cuts, c)
+            to = lip_fallback(c, lis)
+            set_mode(c, to, "화당 립싱크 컷 상한", lis)
             notes.append(f"{c['id']}: 립싱크 컷이 {LIP_MAX}개를 넘어 {MODES[to]}로")
     return notes
 

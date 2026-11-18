@@ -376,7 +376,7 @@ def probe_len(path: str) -> float:
 
 def render_cut(out_path: str, dur: float, still: bytes | None = None, clip: bytes | None = None, camera: str = "고정",
                overlay: bytes | None = None, audio: bytes | None = None, workdir: str = "", clip_start: float = 0.0,
-               sync: bool = False, audio_delay: int = 100) -> dict:
+               sync: bool = False, audio_delay: int = 100, voice: str = "") -> dict:
     """컷 하나를 1080x1920 mp4 로. clip 이 있으면 영상 컷, 없으면 still 정지 컷. → 영상 컷이면 clip_plan 결과."""
     d = workdir or os.path.dirname(out_path)
     n = max(1, int(round(dur * FPS)))
@@ -389,8 +389,10 @@ def render_cut(out_path: str, dur: float, still: bytes | None = None, clip: byte
         plan = {"start": 0.0, "slow": 1.0, "frozen": round(max(0.0, dur - clen), 2)} if sync else clip_plan(clen, dur, clip_start)
         args += (["-ss", f"{plan['start']:.2f}"] if plan["start"] else []) + ["-i", src]
         slow = f"setpts={plan['slow']:.3f}*(PTS-STARTPTS)," if plan["slow"] > 1.0 else "setpts=PTS-STARTPTS,"
+        # 입이 소리보다 빠른 립싱크 영상: 음성을 앞당길 수 없으므로 첫 장면을 그만큼 멈춰 붙여 영상을 늦춘다
+        pre = f"start_mode=clone:start_duration={-audio_delay / 1000:.3f}:" if audio_delay < 0 else ""
         fc.append(f"[0:v]{slow}scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS},"
-                  f"tpad=stop_mode=clone:stop_duration={dur:.2f},setsar=1[v0]")
+                  f"tpad={pre}stop_mode=clone:stop_duration={dur:.2f},setsar=1[v0]")
     else:
         src = os.path.join(d, "src.jpg")
         open(src, "wb").write(still)
@@ -411,7 +413,8 @@ def render_cut(out_path: str, dur: float, still: bytes | None = None, clip: byte
         open(au, "wb").write(audio)
         args += ["-i", au]
         ad = max(0, min(700, int(audio_delay)))
-        fc.append(f"[{idx}:a]aresample=44100,adelay={ad}|{ad},apad[a]")
+        tone = {"phone": "highpass=f=300,lowpass=f=3400,volume=1.4,"}.get(voice, "")      # 전화 목소리: 전화기 소리로 깎음
+        fc.append(f"[{idx}:a]aresample=44100,{tone}adelay={ad}|{ad},apad[a]")
     else:
         args += ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
         fc.append(f"[{idx}:a]anull[a]")
@@ -433,6 +436,11 @@ def concat(paths: list[str], out_path: str) -> None:
                         "-movflags", "+faststart", out_path], capture_output=True, text=True, timeout=600)
     if p.returncode != 0:
         raise RuntimeError(f"ffmpeg concat: {p.stderr[-400:]}")
+
+
+def cutter_is_phone(c: dict) -> bool:
+    from src import cutter
+    return cutter.is_phone(c)
 
 
 def render_episode(cuts: list, get, stills: dict, clips: dict, dub: dict, subs: dict, hook: str = "", english: bool = True,
@@ -472,8 +480,9 @@ def render_episode(cuts: list, get, stills: dict, clips: dict, dub: dict, subs: 
                               clip_start=float((q.get("motion") or {}).get("start", 0) or 0),
                               sync=bool(use_clip and cell.get("lipsync")),
                               # 엔진이 만든 립싱크 영상은 음성 앞에 0.1초 무음을 넣어 보냈고, 바깥에서 만들어 올린 립싱크 영상은 무음 없이 만든 것으로 본다
-                              audio_delay=(0 if use_clip and cell.get("lipsync") and cell.get("manual") else 100)
-                              + (int(cell.get("sync_ms") or 0) if use_clip and cell.get("lipsync") else 0))
+                              audio_delay=max(-700, (0 if use_clip and cell.get("lipsync") and cell.get("manual") else 100)
+                                              + (int(cell.get("sync_ms") or 0) if use_clip and cell.get("lipsync") else 0)),
+                              voice="phone" if cutter_is_phone(c) else "")
             seg["lipsync"] = bool(use_clip and cell.get("lipsync"))
             seg["kind"] = "clip" if use_clip else "still"
             if plan:
