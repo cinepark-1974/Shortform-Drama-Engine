@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.7.1"
+VERSION = "v1.7.2"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -111,7 +111,7 @@ HOW = {
     "edit": "컷(영상·스틸)과 더빙, 자막을 세로 9:16 한 화로 이어 붙입니다. 컷 길이는 더빙에 맞춰 늘리고, 정지 컷에는 카메라 움직임을 넣고, 화면 글자는 한글로 얹습니다.",
     "master": "완성본을 처음부터 끝까지 한 번 보고 확정합니다. 사람이 확인하는 두 번째 지점입니다.",
     "dub": "콘티의 대사를 인물별 고정 목소리로 만듭니다 (ElevenLabs). 만든 음성을 다시 글자로 받아 적어 대본과 비교하고, 다르게 읽힌 줄은 2회까지 다시 만듭니다. 음성이 컷보다 길면 편집에서 컷을 늘립니다.",
-    "clip": "확정한 스틸을 첫 프레임으로 넣어 짧은 영상을 만듭니다 (Replicate · Kling). 테이크마다 첫·중간·마지막 장면을 Claude 가 검수하고, 불합격이면 고쳐서 2회까지 다시 만듭니다. 그래도 불합격이면 그 컷은 정지+카메라로 바꿉니다. 소리는 06·07 단계에서 얹습니다.",
+    "clip": "확정한 스틸을 첫 프레임으로 넣어 영상을 만듭니다. 말 없는 컷은 Kling, 립싱크 컷은 더빙 음성으로 OmniHuman. 만든 직후 엔진이 검사하고, 불합격이면 다시 만듭니다. 립싱크가 두 번 실패하면 뒷모습·속마음으로 바꿉니다.",
     "still": "컷마다 장면 그림을 만듭니다. 인물 확정 그림과 장소 마스터를 기준 그림으로 넣고, 만든 직후 Claude 가 자동 검수합니다(지시문 대상·동작·몸에 거는 소품·같은 얼굴·글자·손). 불합격이면 이유를 지시문에 붙여 2회까지 다시 만들고, 그래도 불합격인 컷만 빨간 표시가 남습니다.",
     "script": "대본을 읽고 작품 정리를 합니다. 엔진은 인물 표기와 장소 세트만 통일하고, 설정 충돌은 '수정 제안'으로 남깁니다. 원고 수정은 감독님이 직접 하고, 고친 원고를 다시 올리면 됩니다.",
     "cast": "인물마다 프로필을 확정하고 얼굴 후보 중 1장을 고릅니다. 장소는 넓은 마스터 1장을 고릅니다. 직접 만든 이미지는 올리기로 넣습니다.",
@@ -666,6 +666,17 @@ overview(work)
 stage = st.radio("단계", [f"{n} {t}" for k, n, t, d in STAGES], horizontal=True, label_visibility="collapsed", key="stage_pick")
 cur = next(k for k, n, t, d in STAGES if stage.startswith(n))
 pipe(work, cur)
+_af = st.session_state.get("auto_fix")
+if _af:                                       # 자동 고치기 중: 사람이 누를 것이 없다는 것을 화면 맨 위에 크게
+    _step = {"still": "새 스틸 그리기", "clip": "영상 다시 만들기", "edit": "편집·렌더링"}.get(_af.get("stage"), "")
+    st.markdown(f"<div style='background:#191970;color:#fff;border-radius:12px;padding:14px 18px;margin:6px 0 10px;font-size:1.05rem'>"
+                f"<b>엔진이 자동으로 고치는 중입니다 · 아무것도 누르지 마세요</b><br>"
+                f"EP {_af.get('ep')} · {', '.join(_af.get('cuts') or []) or '표시된 컷'} · 지금 단계: {_step} · "
+                f"끝나면 09 마스터로 돌아옵니다. 화면이 단계를 옮겨 다니고 아래에 흐린 버튼이 잠깐 보이는 것은 정상입니다.</div>",
+                unsafe_allow_html=True)
+    if st.button("자동 고치기 멈추기", key="af_stop"):
+        st.session_state.pop("auto_fix", None)
+        st.rerun()
 parsed, summ = work["parsed"], work["summary"]
 B = work.get("bible")
 
