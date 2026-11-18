@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.8.1"
+VERSION = "v1.8.2"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -89,6 +89,21 @@ h1,h2,h3,h4{color:var(--navy)!important}
 .hm div.fx{outline:2px solid var(--fix);outline-offset:-2px}
 .lg{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:6px}
 .lg span i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:4px;vertical-align:-1px;border:1px solid var(--line)}
+/* 지금 돌아가는 작업(영상 생성 중… 등)은 크게: 노란 바탕 · 굵은 글씨 · 큰 돌림표 */
+details:has([data-testid="stExpanderIconSpinner"]){border:3px solid var(--y)!important;background:var(--warn-bg)!important;border-radius:14px!important;
+  box-shadow:0 4px 14px rgba(25,25,112,.12)}
+details:has([data-testid="stExpanderIconSpinner"]) summary{padding:18px 20px!important;min-height:64px}
+details:has([data-testid="stExpanderIconSpinner"]) summary p,
+details:has([data-testid="stExpanderIconSpinner"]) summary span{font-size:1.35rem!important;font-weight:800!important;color:var(--navy)!important;line-height:1.4}
+[data-testid="stExpanderIconSpinner"]{transform:scale(1.8);margin-right:12px;color:var(--navy)!important;border-color:var(--navy) transparent transparent transparent!important;opacity:1!important}
+/* 끝난 작업은 초록 테두리로 한눈에 */
+details:has([data-testid="stExpanderIconCheck"]) summary p{font-size:1.1rem!important;font-weight:700!important}
+details:has([data-testid="stExpanderIconCheck"]){border:2px solid #34C759!important;border-radius:14px!important}
+details:has([data-testid="stExpanderIconError"]){border:3px solid var(--fix)!important;background:var(--fix-bg)!important;border-radius:14px!important}
+details:has([data-testid="stExpanderIconError"]) summary p{font-size:1.2rem!important;font-weight:800!important;color:var(--fix)!important}
+/* st.spinner (잠깐 걸리는 작업)도 크게 */
+[data-testid="stSpinner"]{background:var(--warn-bg);border:3px solid var(--y);border-radius:14px;padding:14px 18px}
+[data-testid="stSpinner"] p,[data-testid="stSpinner"] div{font-size:1.25rem!important;font-weight:800!important;color:var(--navy)!important}
 </style>""", unsafe_allow_html=True)
 
 KEYS = secrets_dict()
