@@ -232,11 +232,34 @@ def screen_ui(text: str, kind: str, w: int, h: int):
     return im
 
 
+def _fit_dark(im, pts):
+    """찾은 네 모서리가 화면보다 크거나 어긋나 있으면, 그 안의 꺼진 화면(어두운 영역)에 맞춰 사각형을 다시 잡는다 (화면 컷은 정면이 규칙)."""
+    from PIL import Image, ImageDraw, ImageFilter
+    poly = Image.new("L", im.size, 0)
+    ImageDraw.Draw(poly).polygon(pts, fill=255)
+    grow = Image.new("L", im.size, 0)                      # 모서리가 화면보다 작게 잡힌 경우도 있어 조금 넓혀서 찾는다
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    mx, my = (max(xs) - min(xs)) * 0.12, (max(ys) - min(ys)) * 0.08
+    ImageDraw.Draw(grow).rectangle([min(xs) - mx, min(ys) - my, max(xs) + mx, max(ys) + my], fill=255)
+    dark = im.convert("L").point(lambda v: 255 if v < 58 else 0).filter(ImageFilter.MinFilter(5))
+    from PIL import ImageChops
+    bb = ImageChops.multiply(grow, dark).getbbox()
+    if not bb:
+        return pts
+    x0, y0, x1, y1 = bb
+    area_d, area_p = (x1 - x0) * (y1 - y0), (max(xs) - min(xs)) * (max(ys) - min(ys))
+    if not (0.4 * area_p <= area_d <= 1.6 * area_p):        # 어두운 영역이 화면 크기와 너무 다르면 원래 모서리를 믿는다
+        return pts
+    ix, iy = (x1 - x0) * 0.035, (y1 - y0) * 0.02            # 검은 케이스·테두리까지 잡히므로 안쪽으로 조금 들인다
+    return [(x0 + ix, y0 + iy), (x1 - ix, y0 + iy), (x1 - ix, y1 - iy), (x0 + ix, y1 - iy)]
+
+
 def draw_screen_ui(still: bytes, text: str, quad, kind: str = "phone") -> bytes:
     """화면 글자 컷: 엔진이 그린 화면을 스틸 속 화면의 네 모서리에 맞춰 기울여 붙인다. quad = [[x,y]×4] (0~1, tl·tr·br·bl)."""
     from PIL import Image, ImageDraw, ImageFilter
     im = Image.open(io.BytesIO(still)).convert("RGB")
     pts = [(x * im.width, y * im.height) for x, y in quad]
+    pts = _fit_dark(im, pts)
     import math
     wt, wb = math.dist(pts[0], pts[1]), math.dist(pts[3], pts[2])
     hl, hr = math.dist(pts[0], pts[3]), math.dist(pts[1], pts[2])
@@ -245,8 +268,14 @@ def draw_screen_ui(still: bytes, text: str, quad, kind: str = "phone") -> bytes:
     ui = screen_ui(text, kind, uw, uh)
     co = _persp(pts, [(0, 0), (uw, 0), (uw, uh), (0, uh)])
     warped = ui.transform(im.size, Image.PERSPECTIVE, co, Image.BICUBIC)
-    mask = Image.new("L", im.size, 0)
-    ImageDraw.Draw(mask).polygon(pts, fill=255)
+    poly = Image.new("L", im.size, 0)
+    ImageDraw.Draw(poly).polygon(pts, fill=255)
+    # 꺼진 화면(어두운 부분)에만 붙인다: 화면을 잡은 손가락·테두리·반사는 그대로 위에 남고, 모서리도 화면 모양(둥근 모서리)을 따른다
+    dark = im.convert("L").point(lambda v: 255 if v < 58 else 0).filter(ImageFilter.MinFilter(3)).filter(ImageFilter.MaxFilter(3))
+    from PIL import ImageChops
+    mask = ImageChops.multiply(poly, dark)
+    if sum(mask.histogram()[128:]) < 0.35 * sum(poly.histogram()[128:]):     # 화면이 어둡지 않은 스틸(흰 화면 등): 모서리 사각형 그대로
+        mask = poly
     mask = mask.filter(ImageFilter.GaussianBlur(1.2))
     im.paste(warped, (0, 0), mask)
     buf = io.BytesIO()
@@ -407,7 +436,7 @@ def concat(paths: list[str], out_path: str) -> None:
 
 
 def render_episode(cuts: list, get, stills: dict, clips: dict, dub: dict, subs: dict, hook: str = "", english: bool = True,
-                   screen_box=None, on_step=None) -> tuple[bytes, list]:
+                   screen_box=None, on_step=None, sound: dict | None = None) -> tuple[bytes, list]:
     """한 화 렌더링. get(key) → 바이트. stills/clips/dub = 그 화의 기록. subs = {'hook_en', 'lines': {id: en}}.
     screen_box(cut, still_bytes) → 화면 위치 또는 None. → (mp4 바이트, 타임라인)"""
     tl = timeline(cuts, dub)
@@ -452,4 +481,47 @@ def render_episode(cuts: list, get, stills: dict, clips: dict, dub: dict, subs: 
             parts.append(out)
         final = os.path.join(td, "final.mp4")
         concat(parts, final)
+        if sound and (sound.get("bgm") or sound.get("sfx")):
+            if on_step:
+                on_step(len(cuts), len(cuts), "음악·효과음")
+            starts = {c["id"]: seg["start"] for c, seg in zip(cuts, tl)}
+            mixed = os.path.join(td, "mixed.mp4")
+            mix_sound(final, mixed, sound.get("bgm"), [(b, starts[cid]) for cid, b in (sound.get("sfx") or []) if cid in starts],
+                      tl[-1]["start"] + tl[-1]["dur"] if tl else 0.0, td)
+            final = mixed
         return open(final, "rb").read(), tl
+
+
+BGM_VOL, SFX_VOL = 0.30, 0.85          # 배경 음악은 대사 밑에 깔리게, 대사가 나오면 더 내려감(사이드체인)
+
+
+def mix_sound(src: str, out: str, bgm: bytes | None, sfx: list, dur: float, workdir: str) -> None:
+    """완성본에 배경 음악(대사가 나올 때 자동으로 낮아짐)과 효과음(컷 시작 시각)을 섞는다. 영상은 다시 인코딩하지 않음."""
+    args, fc, mix = ["ffmpeg", "-v", "error", "-y", "-i", src], ["[0:a]aresample=44100,asplit=2[dlg][sc]"], ["[dlg]"]
+    idx = 1
+    if bgm:
+        bp = os.path.join(workdir, "bgm.mp3")
+        open(bp, "wb").write(bgm)
+        args += ["-stream_loop", "-1", "-i", bp]
+        fo = max(0.0, dur - 1.6)
+        fc.append(f"[{idx}:a]aresample=44100,atrim=0:{dur:.2f},asetpts=PTS-STARTPTS,afade=t=in:d=0.6,afade=t=out:st={fo:.2f}:d=1.5,"
+                  f"volume={BGM_VOL}[bg]")
+        fc.append("[bg][sc]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400[bgd]")
+        mix.append("[bgd]")
+        idx += 1
+    else:
+        fc[0] = "[0:a]aresample=44100[dlg]"
+    for i, (b, t0) in enumerate(sfx):
+        fp = os.path.join(workdir, f"sfx{i}.mp3")
+        open(fp, "wb").write(b)
+        args += ["-i", fp]
+        ms = int(max(0.0, t0) * 1000)
+        fc.append(f"[{idx}:a]aresample=44100,adelay={ms}|{ms},volume={SFX_VOL}[s{i}]")
+        mix.append(f"[s{i}]")
+        idx += 1
+    fc.append(f"{''.join(mix)}amix=inputs={len(mix)}:normalize=0:duration=first,alimiter=limit=0.95[a]")
+    args += ["-filter_complex", ";".join(fc), "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+             "-t", f"{dur:.2f}", out]
+    p = subprocess.run(args, capture_output=True, text=True, timeout=600)
+    if p.returncode != 0 or not os.path.exists(out):
+        raise RuntimeError(f"ffmpeg 음악·효과음: {p.stderr[-400:]}")

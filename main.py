@@ -16,10 +16,10 @@ from pathlib import Path
 import streamlit as st
 
 from src import videogen, bible as bb
-from src import cutter, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser
+from src import cutter, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.7.2"
+VERSION = "v1.8"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -2651,6 +2651,48 @@ else:
         eps_state.setdefault(k, {})["sub"] = "done"
         save(work)
 
+    snd = work.setdefault("sounds", {}).setdefault(k, {})
+
+    def sound_sig() -> str:
+        """음악·효과음을 정한 근거(컷 구성)의 지문. 콘티가 바뀌면 다시 만든다."""
+        import hashlib
+        return hashlib.md5(json.dumps([[c["id"], c.get("dur"), c.get("sfx"), c.get("screen_text"), c.get("climax")] for c in cuts],
+                                      ensure_ascii=False).encode()).hexdigest()[:10]
+
+    def sound_ready() -> bool:
+        return bool(snd.get("bgm", {}).get("key")) and snd.get("sig") == sound_sig()
+
+    def make_sound(say=None):
+        """배경 음악 한 곡 + 효과음(최대 5개). Claude 가 콘티를 읽고 정하고, ElevenLabs 가 만든다."""
+        ek = KEYS["ELEVENLABS_API_KEY"]
+        say = say or (lambda t: None)
+        say("어떤 음악·효과음을 넣을지 정하는 중…")
+        pl = sound.plan(KEYS["ANTHROPIC_API_KEY"], hook, cuts, MODEL)
+        total = sum(float(c.get("dur") or 2.5) for c in cuts) + 8          # 더빙으로 컷이 늘어나는 몫까지 넉넉히 (남으면 편집에서 자름)
+        base = f"works/{work['id']}/sound/ep{int(k):03d}"
+        say("배경 음악을 만드는 중… (1~3분)")
+        mk = f"{base}/bgm_{uuid.uuid4().hex[:6]}.mp3"
+        store.put_bytes(mk, sound.music(ek, pl["bgm"], total), "audio/mpeg")
+        out = {"bgm": {"key": mk, "prompt": pl["bgm"], "sec": round(total, 1)}, "sfx": {}, "sig": sound_sig(), "at": now(), "on": snd.get("on", True)}
+        for i, x in enumerate(pl["sfx"]):
+            say(f"효과음 {i + 1}/{len(pl['sfx'])} ({x['id']}) 만드는 중…")
+            try:
+                fk = f"{base}/sfx_{x['id']}_{uuid.uuid4().hex[:6]}.mp3"
+                store.put_bytes(fk, sound.sfx(ek, x["en"], x["sec"]), "audio/mpeg")
+                out["sfx"][x["id"]] = {"key": fk, "prompt": x["en"], "sec": x["sec"]}
+            except Exception as ex:                       # 효과음 하나가 실패해도 나머지는 넣는다
+                out.setdefault("errors", []).append(f"{x['id']}: {str(ex)[:120]}")
+        snd.clear()
+        snd.update(out)
+        save(work)
+
+    def sound_pack():
+        """렌더링에 넘길 소리: 음악을 끈 화는 None."""
+        if not snd.get("on", True) or not snd.get("bgm", {}).get("key"):
+            return None
+        return {"bgm": img_bytes(snd["bgm"]["key"]),
+                "sfx": [(cid, img_bytes(v["key"])) for cid, v in (snd.get("sfx") or {}).items() if v.get("key")]}
+
     def edit_sig() -> str:
         """편집에 들어간 재료의 지문. 재료(스틸·영상·더빙·자막·컷 길이)가 바뀌면 달라진다 → 다시 렌더링할 화로 표시."""
         import hashlib
@@ -2660,7 +2702,9 @@ else:
                                        (((crec.get(c["id"], {}).get("qc_by") or {}).get(crec.get(c["id"], {}).get("key")) or {}).get("motion") or {}).get("start")] for c in cuts}),
                  json.dumps(sub.get("lines", {}), ensure_ascii=False, sort_keys=True), hook, str(work.get("edit_en", True)),
                  json.dumps({c["id"]: crec.get(c["id"], {}).get("sync_ms") for c in cuts if crec.get(c["id"], {}).get("sync_ms")}),
-                 "edit-v3"]          # 편집 방식이 바뀌면 올린다 (v1.5: 화면 합성 · 립싱크 처리 · 완성본 검수) → 다시 렌더링할 화로 표시
+                 json.dumps([snd.get("on", True), snd.get("bgm", {}).get("key"), sorted((snd.get("sfx") or {}).items(), key=lambda kv: kv[0])],
+                            ensure_ascii=False, default=str),
+                 "edit-v4"]          # 편집 방식이 바뀌면 올린다 (v1.8: 화면 합성 손가락 처리 · 음악·효과음) (v1.5: 화면 합성 · 립싱크 처리 · 완성본 검수) → 다시 렌더링할 화로 표시
         return hashlib.md5("|".join(parts).encode()).hexdigest()[:12]
 
     fin = finals.get(k, {})
@@ -2681,16 +2725,59 @@ else:
                     make_subs()
                 st.rerun()
         ep_steps(work, ep_no, "sub")
+        can_snd = bool(KEYS.get("ELEVENLABS_API_KEY") and KEYS.get("ANTHROPIC_API_KEY"))
+        need_snd = can_snd and snd.get("on", True) and not sound_ready()
         if need:
             guide(f"<b>① EP {ep_no} 영어 자막 만들기</b> — 10~20초 걸립니다. 건너뛰어도 08 편집에서 자동으로 만들어집니다.")
+        elif need_snd:
+            guide(f"<b>② EP {ep_no} 배경 음악·효과음 만들기</b> — 2~4분 걸립니다. 건너뛰어도 08 편집에서 자동으로 만들어집니다.")
         else:
             guide("자막이 준비됐습니다. 아래 노란 버튼으로 다음 단계로 갑니다.", done=True)
             if eps_state.get(k, {}).get("sub") != "done":
                 eps_state.setdefault(k, {})["sub"] = "done"
                 save(work)
             next_button(work, "sub", ep_no)
-        st.caption("한국어 자막은 콘티의 대사 그대로입니다. 영어 자막은 Claude 가 구어체로 옮깁니다. 자막 시각은 08 편집에서 더빙 길이에 맞춰 자동으로 잡힙니다. "
-                   "효과음·배경 음악은 아직 넣지 않습니다 (다음 버전).")
+        st.caption("한국어 자막은 콘티의 대사 그대로입니다. 영어 자막은 Claude 가 구어체로 옮깁니다. 자막 시각은 08 편집에서 더빙 길이에 맞춰 자동으로 잡힙니다.")
+        st.markdown("#### 배경 음악 · 효과음")
+        s_a, s_b = st.columns([1, 2])
+        with s_a:
+            on_ = st.checkbox("이 화에 음악·효과음 넣기", value=bool(snd.get("on", True)), key=f"snd_on_{k}")
+            if on_ != snd.get("on", True):
+                snd["on"] = on_
+                save(work)
+                st.rerun()
+        with s_b:
+            lab_ = (f"② EP {ep_no} 배경 음악·효과음 만들기" if need_snd else f"EP {ep_no} 음악·효과음 다시 만들기")
+            if st.button(lab_, type="primary" if (need_snd and not need) else "secondary", disabled=not (can_snd and on_), key=f"snd_go_{k}"):
+                with st.status("음악·효과음을 만드는 중…") as ss_:
+                    try:
+                        make_sound(lambda t: ss_.update(label=t))
+                        ss_.update(label="음악·효과음 완료", state="complete")
+                    except Exception as ex:
+                        ss_.update(label="음악·효과음 실패", state="error")
+                        st.error(f"음악·효과음을 만들지 못했습니다: {ex}")
+                st.rerun()
+        if not can_snd:
+            st.info("Streamlit Secrets 에 ELEVENLABS_API_KEY 가 있어야 음악·효과음을 만들 수 있습니다.")
+        if snd.get("bgm", {}).get("key"):
+            if snd.get("sig") != sound_sig():
+                st.markdown("<span class='tag fix'>콘티가 바뀜</span> <span class='small'>음악·효과음을 만든 뒤 콘티가 바뀌었습니다. 08 편집에서 자동으로 다시 만듭니다.</span>", unsafe_allow_html=True)
+            st.markdown(f"<div class='cut'><div class='h'>배경 음악 · {snd['bgm'].get('sec')}초</div><div class='s'>{snd['bgm'].get('prompt', '')}</div></div>", unsafe_allow_html=True)
+            try:
+                st.audio(img_bytes(snd["bgm"]["key"]), format="audio/mpeg")
+            except Exception:
+                pass
+            for cid, v in (snd.get("sfx") or {}).items():
+                f1, f2 = st.columns([2, 1])
+                with f1:
+                    st.markdown(f"<div class='cut'><div class='h'>효과음 · {cid} · {v.get('sec')}초</div><div class='s'>{v.get('prompt', '')}</div></div>", unsafe_allow_html=True)
+                with f2:
+                    try:
+                        st.audio(img_bytes(v["key"]), format="audio/mpeg")
+                    except Exception:
+                        pass
+            for e_ in snd.get("errors") or []:
+                st.caption(f"효과음 실패: {e_}")
         if subs_stale() and sub.get("lines"):
             st.markdown("<span class='tag fix'>대사가 바뀜</span> <span class='small'>콘티의 대사가 자막을 만든 뒤에 바뀌었습니다. 다시 만들면 됩니다.</span>", unsafe_allow_html=True)
         st.markdown(f"<div class='cut'><div class='h'>첫머리 훅 자막</div><div class='a'>{hook}</div><div class='s'>{sub.get('hook_en', '')}</div></div>", unsafe_allow_html=True)
@@ -2778,6 +2865,11 @@ else:
                         if en_on and (not sub.get("lines") or subs_stale()) and KEYS.get("ANTHROPIC_API_KEY") and lines:
                             s_.update(label="영어 자막을 쓰는 중…")
                             make_subs()
+                        if snd.get("on", True) and not sound_ready() and KEYS.get("ELEVENLABS_API_KEY") and KEYS.get("ANTHROPIC_API_KEY"):
+                            try:
+                                make_sound(lambda t: s_.update(label=t))
+                            except Exception as ex:          # 음악이 실패해도 완성본은 만든다 (소리 없이)
+                                st.warning(f"음악·효과음을 만들지 못해 빼고 렌더링합니다: {ex}")
                         boxes = work.setdefault("screen_box", {}).setdefault(k, {})
 
                         def screen_box(c, still):
@@ -2795,7 +2887,8 @@ else:
                             return tuple(e["box"]) if e.get("box") else None
                         try:
                             mp4, tl = editor.render_episode(cuts, img_bytes, srec, crec, drec, sub, hook=hook, english=en_on, screen_box=screen_box,
-                                                            on_step=lambda i, n, cid: s_.update(label=f"컷 {i + 1}/{n} ({cid}) 렌더링 중…"))
+                                                            on_step=lambda i, n, cid: s_.update(label=f"컷 {i + 1}/{n} ({cid}) 렌더링 중…" if i < n else "음악·효과음 섞는 중…"),
+                                                            sound=sound_pack())
                         except Exception as ex:
                             st.session_state.pop("auto_fix", None)
                             st.error(f"렌더링 실패: {ex}")
