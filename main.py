@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser
 from src.store import Store, secrets_dict
 
-VERSION = "v1.7"
+VERSION = "v1.7.1"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -2049,7 +2049,9 @@ elif cur == "clip":
                     elif cell.get("tries", 0) < QC_RETRY:
                         retry.append((cutmap[cid], qc.fix_prompt(cell.get("prompt", ""), q)))
                     else:                            # 다시 만들어도 불합격: 가장 나은 테이크 + 정지 컷 전환 표시
-                        pool = cell.get("lip_takes") if cell.get("lip_job") and cell.get("lip_takes") else cell["takes"]   # 말하는 컷은 립싱크 테이크 안에서만
+                        new = cell["takes"][int(cell.get("from_take", 0)):] or cell["takes"][-1:]   # 이번에 만든 테이크 안에서만 고른다 (예전 영상이 다시 나오지 않게)
+                        lipnew = [t for t in new if t in cell.get("lip_takes", [])]
+                        pool = lipnew if cell.get("lip_job") and lipnew else new        # 말하는 컷은 립싱크 테이크 안에서만
                         bk = min(pool, key=lambda t: qc.score(cell.get("qc_by", {}).get(t)))
                         cell["key"], cell["qc"] = bk, cell["qc_by"].get(bk)
                         cell["lipsync"] = bk in cell.get("lip_takes", [])
@@ -2094,6 +2096,7 @@ elif cur == "clip":
             keep = ("takes", "qc_by", "key") if old.get("still") in (None, still) else ("takes", "qc_by")   # 스틸이 바뀌었으면 예전 영상은 확정에서 뺌
             rec[c["id"]] = {**{k: v for k, v in old.items() if k in keep}, "still": still,
                             "tries": old.get("tries", 0) + 1 if again else 0,
+                            "from_take": old.get("from_take", 0) if again else len(old.get("takes") or []),     # 이번 만들기의 첫 테이크 위치
                             "pred": p["id"], "get": p["get"], "status": p["status"], "prompt": prompt, "mode": mode,
                             "model": videogen.TALK_MODELS[TALK_KIND]["model"] if use_lip else VMODEL,
                             **({k: old[k] for k in ("lip_takes", "lipsync", "manual") if k in old and "key" in keep}),
