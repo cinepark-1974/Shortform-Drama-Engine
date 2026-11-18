@@ -22,6 +22,11 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 SIZES = ["ECU", "CU", "MCU", "MS", "MLS", "WS", "INSERT", "2-SHOT", "OTS"]
 ANGLES = ["정면", "3/4 측면", "측면", "뒤에서", "어깨 너머", "하이앵글", "로우앵글", "부감", "POV"]
 MOTIONS = {"still": "정지+카메라", "move": "짧은 움직임", "video": "완전 영상"}
+# v1.7 대사 처리 방식: 입을 맞춰야 하는 컷을 화당 1~3개로 줄이고, 립싱크가 실패하면 엔진이 다른 방식으로 바꾼다
+MODES = {"lip": "얼굴 립싱크", "inner": "속마음", "reaction": "리액션", "back": "뒷모습", "off": "화면 밖·전화"}
+LIP_MAX = 3                                   # 한 화 립싱크 컷 상한
+LIP_SIZES = ("MCU", "CU")                     # 립싱크 컷 구도: 입이 충분히 크게 찍히는 크기
+LIP_ANGLES = ("정면", "3/4 측면")
 CUTS_LO, CUTS_HI = 12, 18      # 한 화 컷 수 허용 범위 (목표 14~16)
 MAX_VIDEO = 4          # 한 화 완전 영상 컷 상한 (마지막 컷·클라이맥스 포함)
 ALL_MOVE = True        # v1.2: 모든 컷을 영상으로 (화면 글자 컷만 정지). False 면 아래 상한으로 일부 컷만 영상 (절약)
@@ -58,11 +63,20 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 - 대본의 모든 S#(장면)은 최소 1컷씩. scene 에는 그 컷이 속한 S# 번호를 정확히 씀.
 - 같은 장면 안에서 컷 크기를 섞음: 넓은 컷(MS·MLS·WS), 얼굴(MCU·CU), 인서트(손·휴대폰·모니터·소품)를 골고루. 세로 화면이라 WS 는 화당 1개 이하.
 
-대사 (립싱크 모델이 없음)
-- 말하는 얼굴이 보이는 컷(on_screen true)은 motion "still", dur 2.5초 이하.
-- 대사가 2.5초(10음절)를 넘으면 컷을 나눔: 앞 컷은 말하는 사람(on_screen true), 다음 컷은 듣는 사람의 반응·뒷모습·손(on_screen false)으로 대사를 이어 감.
-  나눈 대사는 대본 문장을 그대로 끊어서 앞 컷과 뒷 컷 text 에 나눠 담음 (합치면 원문 그대로).
-- 화면 밖 목소리·듣는 사람 컷은 on_screen false. 대사 컷 dur 는 (그 컷 대사 음절 수 ÷ 4) + 0.3초 이상.
+대사 처리 방식 (컷마다 dialogue.mode 하나)
+- "lip"(얼굴 립싱크): 말하는 사람의 얼굴이 보이고 입이 대사에 맞춰 움직임. 한 화에 1~3컷만.
+  그 화의 결정적인 대사에만 씀: 첫 3초 훅의 대사, 클라이맥스 대사, 마지막 클리프행어 대사.
+- "inner"(속마음): 인물 얼굴이 보이지만 입은 다물고 목소리만 흐름. 대본에서 원래 속마음·독백·내레이션인 대사에만 씀.
+- "reaction"(리액션): 말하는 사람은 화면 밖, 대사를 듣고 굳는 상대의 얼굴을 보여 줌. chars 에 말하는 사람을 넣지 않음.
+- "back"(뒷모습): 말하는 사람의 뒤통수·어깨 너머 컷. chars 에 '이름:뒷모습'. 얼굴은 안 보임.
+- "off"(화면 밖·전화): 전화 목소리, 문 너머 목소리, 화면 글자 컷 위의 목소리.
+- 소리 내어 한 대사는 inner 로 처리하지 않음 (속마음이 되면 상대가 그 말을 못 들은 것이 됨). lip·reaction·back·off 중에서 고름.
+- dialogue.fallback: 립싱크가 실패했을 때 엔진이 바꿀 방식. 속마음이어도 되는 대사만 "inner", 나머지는 "back".
+- lip 컷의 구도 고정: MCU 또는 CU, 정면 또는 3/4 측면. 말하는 사람은 그 컷에서 한 명. 손·컵·휴대폰이 입 근처에 없음.
+  걷거나 돌아서는 동작 없이 제자리에서 말함. 옆얼굴(측면)·뒤에서·부감으로 말하는 컷 금지.
+- 대사가 3초(12음절)를 넘으면 컷을 나눔: 앞 컷과 뒷 컷에 대본 문장을 그대로 끊어서 나눠 담음 (합치면 원문 그대로).
+  뒷 컷은 reaction 이나 back 으로 이어 가면 립싱크 없이 대사가 흐름.
+- 대사 컷 dur 는 (그 컷 대사 음절 수 ÷ 4) + 0.3초 이상.
 
 움직임
 - motion: "still"(정지 그림+카메라 움직임), "move"(짧은 움직임: 눈 깜빡임·고개 돌림·손 움직임, 입은 다묾), "video"(완전 영상).
@@ -112,7 +126,7 @@ SYSTEM = """당신은 한국 실사 숏폼 드라마(세로 9:16, 한 화 60초 
 - 기계를 다루는 동작(카드 찍기, 게이트 열림, 키보드 입력, 버튼 누르기, 화면 터치)은 INSERT 컷으로 따로 뺌.
   그 INSERT 컷의 frame 은 "방문증을 쥔 손이 게이트 리더기 바로 앞에 있다" 같은 정지 상태.
 - 확정형. '살짝·약간·정도·또는·처럼 보·수 있' 금지. 영어는 'slightly·maybe·or' 금지.
-- dialogue: 이 컷에서 들리는 대사 {"who":통일 이름,"text":대사,"on_screen":입이 보이면 true}. 없으면 null.
+- dialogue: 이 컷에서 들리는 대사 {"who":통일 이름,"text":대사,"mode":"lip|inner|reaction|back|off","fallback":"back|inner"}. 없으면 null.
 - screen_text: 휴대폰·모니터·문서에 보이는 글자. 그림에는 글자를 넣지 않고 편집에서 얹으므로 글자만 적음. 없으면 "".
 - chars: 화면에 보이는 인물(통일 이름). 손·뒷모습만 보이면 이름 뒤에 ':손' 또는 ':뒷모습'.
 - loc: 주어진 장소 id. sfx: 효과음 한 단어(없으면 "").
@@ -137,6 +151,9 @@ REVIEW = """당신은 한국 실사 숏폼 드라마의 콘티 감수자입니�
 8. 손에 든 소품이 frame 에 나오는데 그 컷 props 에 이름이 없으면 채움. 같은 가방·휴대폰이 컷마다 다른 말(가방/서류가방/노트북 가방)로
    적혀 있으면 [소품 목록]·props 의 이름 하나로 통일. 같은 장면에서 가방을 든 인물이 다음 컷에서 빈손이면 고침.
 9. 같은 장면에서 한 인물의 looks 가 컷마다 다르면 하나로 통일. frame 에 옷·머리 묘사가 있으면 뺌 (looks 가 정함). looks 필드는 지우지 않음.
+10. 대사 처리 방식: lip 컷이 한 화에 3개를 넘으면 결정적인 대사(훅·클라이맥스·마지막) 외에는 reaction·back 으로 바꿈.
+   lip 컷이 옆얼굴·뒤에서·전신 구도이거나 입 근처에 손·물건이 있으면 MCU 정면 또는 3/4 측면으로 고침.
+   소리 내어 한 대사가 inner 이면 back 으로 바꿈. dialogue 의 mode·fallback 필드는 지우지 않음.
 
 컷을 나누면 길이(dur)를 나눠 담고, 대사는 원문을 그대로 나눠 담음. 고칠 것이 없는 컷은 그대로 둠.
 컷 번호(no)는 처음부터 다시 매김. 다른 필드 형식과 규칙(컷 수 14~16, 합계 50~70초)은 감독 콘티와 같음.
@@ -394,7 +411,11 @@ def normalize(cuts: list, ep: dict, bible: dict | None = None) -> list:
             continue
         d = c.get("dialogue")
         if isinstance(d, dict) and d.get("text"):
-            d = {"who": canon(str(d.get("who", "")), nm), "text": str(d["text"]), "on_screen": bool(d.get("on_screen", True))}
+            md = str(d.get("mode") or "").strip()
+            if md not in MODES:                       # 예전 형식: 입이 보이면 립싱크, 아니면 화면 밖
+                md = "lip" if bool(d.get("on_screen", True)) else "off"
+            fb = "inner" if str(d.get("fallback") or "") == "inner" else "back"
+            d = {"who": canon(str(d.get("who", "")), nm), "text": str(d["text"]), "mode": md, "fallback": fb, "on_screen": md == "lip"}
         else:
             d = None
         try:
@@ -419,7 +440,9 @@ def normalize(cuts: list, ep: dict, bible: dict | None = None) -> list:
             "motion_en": str(c.get("motion_en") or c.get("action_en") or "").strip(), "dialogue": d,
             "screen_text": str(c.get("screen_text") or ""), "sfx": str(c.get("sfx") or ""),
         })
-    return fit_durations(cap_video(unify_looks(clean_words(out))))
+    out = unify_looks(clean_words(out))
+    enforce_modes(out)
+    return fit_durations(cap_video(out))
 
 
 def clean_words(cuts: list) -> list:
@@ -450,9 +473,126 @@ def fix_screens(cuts: list) -> list:
     return cuts
 
 
+def dlg_mode(c: dict) -> str:
+    """컷 대사의 처리 방식. 대사가 없으면 ''. 예전 콘티(mode 없음)는 입이 보이면 lip."""
+    d = c.get("dialogue")
+    if not d:
+        return ""
+    md = d.get("mode")
+    return md if md in MODES else ("lip" if d.get("on_screen") else "off")
+
+
 def is_talk(c: dict) -> bool:
-    """말하는 얼굴이 화면에 보이는 컷."""
-    return bool(c.get("dialogue") and c["dialogue"].get("on_screen")) and not is_screen_cut(c)
+    """말하는 얼굴이 화면에 보이고 입을 대사에 맞추는 컷 (립싱크 컷)."""
+    return dlg_mode(c) == "lip" and not is_screen_cut(c)
+
+
+def _speaker(c: dict) -> str:
+    return (c.get("dialogue") or {}).get("who", "")
+
+
+def _faces(c: dict) -> list:
+    return [ch for ch in c.get("chars", []) if ":" not in ch]
+
+
+def _remember(c: dict):
+    """처리 방식을 바꾸기 전의 구도를 한 번만 보관한다 (사람이 립싱크로 되돌릴 때 복원)."""
+    if "orig" not in c:
+        c["orig"] = {k: c.get(k) for k in ("chars", "size", "angle", "frame_ko", "frame_en")}
+        c["orig"]["chars"] = list(c.get("chars") or [])
+
+
+def set_mode(c: dict, to: str, why: str = "") -> bool:
+    """컷 하나의 대사 처리 방식을 바꾸고 구도를 그 방식에 맞춘다. 스틸을 다시 그려야 하면 True.
+    - back: 말하는 사람을 뒷모습으로 (다른 인물이 있으면 어깨 너머 구도). 새 스틸 필요.
+    - inner·off·reaction: 입을 다문 얼굴 + 목소리. 스틸은 그대로 쓴다.
+    - lip: 보관해 둔 원래 구도로 되돌림 (원래 구도가 다르면 새 스틸 필요)."""
+    d = c.get("dialogue")
+    if not d or to not in MODES or is_screen_cut(c) and to == "lip":
+        return False
+    old = dlg_mode(c)
+    if old == to:
+        return False
+    redraw = False
+    if to == "lip":
+        o = c.pop("orig", None)
+        if o:
+            redraw = any(c.get(k) != o.get(k) for k in o)
+            c.update(o)
+        spk = _speaker(c)
+        c["chars"] = [spk if ch.split(":")[0] == spk else ch for ch in c.get("chars", [])] or [spk]
+        if spk not in c["chars"]:
+            c["chars"].insert(0, spk)
+            redraw = True
+        if c.get("size") not in LIP_SIZES:
+            c["size"], redraw = "MCU", True
+        if c.get("angle") not in LIP_ANGLES:
+            c["angle"], redraw = "3/4 측면", True
+    elif to == "back":
+        _remember(c)
+        spk = _speaker(c)
+        rest = [ch for ch in c.get("chars", []) if ch.split(":")[0] != spk]
+        c["chars"] = [f"{spk}:뒷모습"] + rest
+        if any(":" not in ch for ch in rest):
+            c["size"], c["angle"] = "OTS", "어깨 너머"
+        else:
+            c["size"], c["angle"] = "MS", "뒤에서"
+        c["frame_ko"] = (c.get("frame_ko") or "").rstrip() + f" {spk}는 카메라를 등지고 서 있어 뒷모습만 보이고 얼굴은 보이지 않는다."
+        c["frame_en"] = ((c.get("frame_en") or "").rstrip() + " The speaking character stands with the back to the camera: only the back of the head "
+                         "and the shoulders are visible, and the face is not visible." + (" The other person faces the camera over that shoulder."
+                                                                                           if c["size"] == "OTS" else ""))
+        redraw = True
+    elif old == "back" and c.get("orig"):           # 뒷모습에서 다른 방식으로: 원래 구도로 되돌림
+        c.update(c.pop("orig"))
+        redraw = True
+    d["mode"], d["on_screen"] = to, to == "lip"
+    log = c.setdefault("mode_log", [])
+    log.append({"from": old, "to": to, "why": why})
+    return redraw
+
+
+def lip_fallback(c: dict) -> str:
+    """립싱크가 실패한 컷을 바꿀 방식: 속마음이어도 되는 대사만 inner, 나머지는 back."""
+    return "inner" if (c.get("dialogue") or {}).get("fallback") == "inner" else "back"
+
+
+def enforce_modes(cuts: list) -> list:
+    """대사 처리 방식 규칙을 코드로 강제한다 (새로 나눈 콘티에만 적용).
+    - 화면 글자 컷의 대사는 화면 밖 목소리.
+    - 립싱크 컷은 말하는 사람의 얼굴이 화면에 있어야 하고, 구도는 MCU·CU / 정면·3/4 측면.
+    - 립싱크 컷이 화당 LIP_MAX 개를 넘으면 클라이맥스·마지막 컷·첫 3컷 순으로 남기고 나머지는 바꾼다. → 바꾼 내용 목록"""
+    notes = []
+    for c in cuts:
+        md = dlg_mode(c)
+        if not md:
+            continue
+        if is_screen_cut(c) and md == "lip":
+            c["dialogue"]["mode"], c["dialogue"]["on_screen"] = "off", False
+            notes.append(f"{c['id']}: 화면 글자 컷의 대사를 화면 밖 목소리로")
+            continue
+        if md == "lip":
+            spk = _speaker(c)
+            if spk not in _faces(c):                  # 말하는 사람 얼굴이 없는 컷은 립싱크가 될 수 없다
+                back = any(ch == f"{spk}:뒷모습" for ch in c.get("chars", []))
+                c["dialogue"]["mode"] = "back" if back else ("reaction" if _faces(c) else "off")
+                c["dialogue"]["on_screen"] = False
+                notes.append(f"{c['id']}: 말하는 사람 얼굴이 없어 {MODES[c['dialogue']['mode']]}로")
+                continue
+            if c.get("size") not in LIP_SIZES:
+                notes.append(f"{c['id']}: 립싱크 컷 구도 {c.get('size')} → MCU")
+                c["size"] = "MCU"
+            if c.get("angle") not in LIP_ANGLES:
+                notes.append(f"{c['id']}: 립싱크 컷 각도 {c.get('angle')} → 3/4 측면")
+                c["angle"] = "3/4 측면"
+    lips = [c for c in cuts if dlg_mode(c) == "lip"]
+    if len(lips) > LIP_MAX:
+        last = cuts[-1]["id"] if cuts else ""
+        rank = sorted(lips, key=lambda c: (not c.get("climax"), c["id"] != last, c.get("no", 99) > 3, c.get("no", 99)))
+        for c in rank[LIP_MAX:]:
+            to = lip_fallback(c)
+            set_mode(c, to, "화당 립싱크 컷 상한")
+            notes.append(f"{c['id']}: 립싱크 컷이 {LIP_MAX}개를 넘어 {MODES[to]}로")
+    return notes
 
 
 def apply_move(cuts: list, on: bool = True) -> bool:
@@ -588,6 +728,9 @@ def check(cuts: list, known_chars: set, known_locs: set, scenes: list | None = N
             issues.append({"id": c["id"], "level": "fix", "msg": f"영어 지시 문장 금지어 {b}"})
         for b in banned_in(" ".join([c["action"], c.get("frame_ko", "")])):                  # 한국어는 화면 표시용 → 알림만
             issues.append({"id": c["id"], "level": "todo", "msg": f"한국어 문장에 애매한 표현 {b}"})
+    n_lip = sum(1 for c in cuts if is_talk(c))
+    if n_lip > LIP_MAX:
+        issues.append({"id": "전체", "level": "todo", "msg": f"립싱크 컷 {n_lip}개 (화당 {LIP_MAX}개까지 · 나머지는 리액션·뒷모습으로)"})
     return issues
 
 
