@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.8.2"
+VERSION = "v1.8.3"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -193,6 +193,52 @@ def save(work: dict):
 
 
 # ───────── 작품 상태 ─────────
+def apply_bible(work: dict, newb: dict) -> list[str]:
+    """작품 정리를 새로 적용한다. 인물 이름·장소 번호가 바뀌어도 확정한 그림이 따라가도록 옮기고, 이전 정리는 되돌릴 수 있게 보관한다.
+    → 옮긴 내용 목록"""
+    import copy
+    old = work.get("bible") or {}
+    notes = []
+    if old and old != newb:
+        hist = work.setdefault("bible_hist", [])
+        hist.append({"at": now(), "bible": old})
+        del hist[:-3]
+    # 인물: 새 이름의 표기(aliases)에 예전 이름이 있거나, 예전 인물의 표기에 새 이름이 있으면 같은 사람
+    cast = work.setdefault("cast", {})
+    old_alias = {c["name"]: set(c.get("aliases") or []) for c in old.get("characters", [])}
+    for ch in newb.get("characters", []):
+        n = ch["name"]
+        if cast.get(n, {}).get("pick"):
+            continue
+        names = {n, *[a for a in (ch.get("aliases") or []) if a]}
+        cands = [o for o, v in cast.items() if o != n and v.get("pick") and (o in names or n in old_alias.get(o, set()))]
+        if len(cands) == 1:
+            cast[n] = copy.deepcopy(cast[cands[0]])
+            notes.append(f"인물 {cands[0]} → {n}")
+    # 장소: 예전 정리의 번호→이름으로, 같은 이름의 새 번호를 찾아 옮긴다 (번호가 같아도 다른 장소면 옮긴다)
+    loc = work.get("loc", {})
+    old_name = {l["id"]: l["name"] for l in old.get("locations", [])}
+    new_id = {l["name"]: l["id"] for l in newb.get("locations", [])}
+    if loc and (old_name or any(v.get("name") for v in loc.values())):
+        moved, orphan = {}, work.setdefault("loc_orphan", {})
+        for oid, v in loc.items():
+            nm = old_name.get(oid) or v.get("name")          # 그림을 확정할 때의 작품 정리가 기준
+            nid = new_id.get(nm) if nm else oid
+            if nm and not nid:                              # 이름이 조금 다르면 (소회의실 ↔ 대성그룹 소회의실) 한쪽이 다른 쪽을 품는 한 곳만
+                near = [i for n_, i in new_id.items() if nm in n_ or n_ in nm]
+                nid = near[0] if len(near) == 1 else None
+            if nid:
+                if nid != oid:
+                    notes.append(f"장소 {oid} {nm} → {nid}")
+                moved.setdefault(nid, {**v, "name": nm} if nm else v)
+            else:
+                orphan[f"{oid} {nm}"] = v
+                notes.append(f"장소 {oid} {nm}: 새 정리에 없는 장소라 보관함으로")
+        work["loc"] = moved
+    work["bible"] = newb
+    return notes
+
+
 def chars_ranked(work: dict) -> list[str]:
     b = work.get("bible")
     if not b:
@@ -627,6 +673,37 @@ with st.sidebar:
     sel = st.selectbox("작품 선택", labels, index=idx, label_visibility="collapsed")
     st.session_state["wid"] = None if sel == "＋ 새 작품" else sel.rsplit("·", 1)[-1].strip()
     st.caption("저장은 자동입니다. 대본·작품 정리·캐스팅·컷은 만들거나 고르는 즉시 저장소에 저장되고, 앱을 다시 열면 마지막 작품이 열립니다.")
+    if st.session_state.get("wid"):
+        with st.expander("작품 전체 저장 · 불러오기 (json)"):
+            st.caption("캐스팅·콘티·스틸·더빙·영상·완성본 기록이 모두 들어 있습니다. 그림·영상 파일은 저장소에 그대로 있고, 파일 위치만 담깁니다.")
+            try:
+                _w = store.load_work(st.session_state["wid"])
+                st.download_button("작품 전체 내려받기 (json)", json.dumps(_w, ensure_ascii=False, indent=1).encode("utf-8"),
+                                   file_name=f"{_w.get('title', 'work')}_{_w['id']}_{dt.datetime.now().strftime('%m%d_%H%M')}.json",
+                                   mime="application/json", width="stretch")
+            except Exception as ex:
+                st.caption(f"내려받기 준비 실패: {ex}")
+            up_ = st.file_uploader("작품 전체 불러오기 (json)", type=["json"], key="work_up")
+            if up_:
+                try:
+                    _n = json.loads(up_.getvalue().decode("utf-8"))
+                    ok_ = isinstance(_n, dict) and _n.get("id") and _n.get("parsed")
+                except Exception:
+                    ok_ = False
+                if not ok_:
+                    st.error("작품 전체 json 이 아닙니다. 01 대본의 '정리 결과 불러오기'는 작품 정리(json)용입니다.")
+                else:
+                    st.warning(f"「{_n.get('title')}」({_n['id']}) 을 이 파일 내용으로 되돌립니다. 지금 상태는 덮어쓰기 전에 기록으로 남깁니다.")
+                    if st.button("이 파일로 되돌리기", type="primary", key="work_restore"):
+                        try:
+                            cur_ = store.load_work(_n["id"])
+                            store.put_bytes(f"works/{_n['id']}/backup/before_restore_{uuid.uuid4().hex[:6]}.json",
+                                            json.dumps(cur_, ensure_ascii=False).encode("utf-8"), "application/json")
+                        except Exception:
+                            pass
+                        store.save_work(_n)
+                        st.session_state["wid"] = _n["id"]
+                        st.rerun()
     st.markdown("### 연결 상태")
     for k, label in [("OPENAI_API_KEY", "그림 · gpt-image-2"), ("ANTHROPIC_API_KEY", "정리·컷 · Claude"),
                      ("ELEVENLABS_API_KEY", "더빙 · ElevenLabs"), ("REPLICATE_API_TOKEN", "영상 · Replicate")]:
@@ -715,23 +792,33 @@ if cur == "script":
         with c1:
             if st.button("AI로 작품 정리 (Claude)", type="primary", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
                 with st.status("장면 전체를 읽고 인물·장소를 통일하는 중… (3~5분, 창을 닫지 마세요)") as s:
-                    work["bible"] = bb.build(KEYS["ANTHROPIC_API_KEY"], parsed, MODEL)
+                    st.session_state["bible_notes"] = apply_bible(work, bb.build(KEYS["ANTHROPIC_API_KEY"], parsed, MODEL))
                     save(work)
                     s.update(label="작품 정리 완료", state="complete")
                 st.rerun()
         with c2:
             jf = st.file_uploader("정리 결과 불러오기 (JSON)", type=["json"], key="bible_up")
             if jf and st.button("불러온 정리 결과 적용"):
-                work["bible"] = bb.validate(json.loads(jf.getvalue().decode("utf-8")), parsed)
+                st.session_state["bible_notes"] = apply_bible(work, bb.validate(json.loads(jf.getvalue().decode("utf-8")), parsed))
                 save(work)
                 st.rerun()
         with c3:
             smp = SAMPLES / "danjjan_bible.json"
             if parsed.get("title") == "단짠단짠" and smp.exists():
                 if st.button("「단짠단짠」 정리본 적용 (Claude 분석본)"):
-                    work["bible"] = bb.validate(json.loads(smp.read_text("utf-8")), parsed)
+                    st.session_state["bible_notes"] = apply_bible(work, bb.validate(json.loads(smp.read_text("utf-8")), parsed))
                     save(work)
                     st.rerun()
+        if st.session_state.get("bible_notes"):
+            st.success("작품 정리를 적용했습니다. 확정한 그림을 새 이름·번호로 옮겼습니다: " + " · ".join(st.session_state.pop("bible_notes")))
+        if work.get("bible_hist"):
+            h_ = work["bible_hist"][-1]
+            if st.button(f"이전 작품 정리로 되돌리기 ({h_['at'][:16]} 이전 판)", key="bible_undo"):
+                work["bible_hist"].pop()
+                st.session_state["bible_notes"] = apply_bible(work, h_["bible"])
+                work["bible_hist"].pop()            # 되돌리기는 되돌린 판을 기록에 다시 쌓지 않는다
+                save(work)
+                st.rerun()
         if B:
             if B.get("_missing_scenes") or B.get("_bad_loc"):
                 st.markdown(f'<span class="tag fix">점검</span> 장소가 비어 있는 장면 {B.get("_missing_scenes")} · 없는 장소 id {B.get("_bad_loc")}',
