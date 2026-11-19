@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import io
+import re
 import time
 
 import requests
@@ -42,8 +43,9 @@ STYLES = {
             "strands; real knit and fabric texture that follows the body with gentle tension and soft folds. "
             "POSE & COMPOSITION: front-facing, eye-level camera, relaxed shoulders, arms resting naturally at the sides, "
             "direct eye contact with the camera. Vertical 3:4 framing from the top of the head to the upper hips. "
-            "Neutral bright grey seamless studio background. "
-            "LIGHTING & PHOTOGRAPHY: soft diffused studio light with gentle directional shadows, natural skin highlights and "
+            "Soft warm off-white seamless studio background. "
+            "WARMTH: an approachable, trustworthy presence: soft eyes, relaxed brow and facial muscles, a calm friendly face. "
+            "LIGHTING & PHOTOGRAPHY: soft warm diffused studio light with gentle directional shadows, natural skin highlights and "
             "real dimensionality without heavy beauty retouching. 85mm portrait lens, realistic depth of field, natural "
             "optical rendering, fine photographic grain, accurate skin and fabric texture, natural color grading." + NO_WEAR + NEG +
             " No artificial hair clumps, no plastic hair shine, no exaggerated anatomy, no distorted facial features, "
@@ -66,7 +68,7 @@ STYLES = {
     # 02 캐스팅 시트: 확정 정면 그림을 기준 그림으로 넣어 3/4·전신·뒷모습을 만든다 (자세는 VIEWS 문장이 정함).
     "sheet": ("A Korean actor casting reference sheet photo, ultra-photorealistic studio photography. " + SKIN,
               " Real knit and fabric texture with soft folds, individual hair strands visible. "
-              "Neutral bright grey seamless studio background, soft diffused studio light with gentle shadows, "
+              "Soft warm off-white seamless studio background, soft warm diffused studio light with gentle shadows, "
               "85mm lens, natural optical rendering, fine photographic grain, natural color grading." + NO_WEAR + NEG),
 }
 # 캐스팅 시트 (「3 Minutes」 4장 세트 방식): 정면 = 확정 그림, 나머지 3장은 정면을 기준 그림으로 생성.
@@ -101,11 +103,35 @@ def banned_in(text: str) -> list[str]:
     return [f"'{w.strip()}' → {why}" for w, why in BANNED if w in t]
 
 
+# 인물 기준 그림이 '조폭'처럼 나오는 문제 (2026-11-19 Mr. MOON): 회색 배경 + 어두운 정장 + 무표정 직시 + 날카로운 눈매가 겹치면
+# 그림 모델이 범죄물 인상으로 그린다. 악역(antagonist)이 아니면 위압적인 단어를 부드러운 말로 바꾼다.
+SOFTEN = [(r"\b(stern|severe|grim|hard|harsh|steely|cold|icy|menacing|intimidating|fierce|tough)\b(?= (?:look|expression|face|gaze|stare|eyes|demeanor|jaw))", "calm"),
+          (r"\b(intense|piercing|sharp|penetrating|hawk-like|predatory|narrowed)\s+(gaze|stare|eyes|look)", r"warm steady \2"),
+          (r"\bserious (?:expression|look|face)\b", "calm friendly expression with a faint closed-mouth smile"),
+          (r"\bneutral (?:expression|look|face)\b", "relaxed friendly expression with a faint closed-mouth smile"),
+          (r"\bslicked[- ]back\b", "neatly side-parted"),
+          (r"\bstrong,? (?:angular|square|chiseled|defined) jaw(?:line)?\b", "soft natural jawline"),
+          (r"\b(?:angular|square|chiseled) jaw(?:line)?\b", "soft natural jawline"),
+          (r"\b(?:an? )?open[- ]collar(?:ed)? (?:white )?shirt\b", "a light blue shirt with a plain navy tie"),
+          (r"\b(?:an? )?unbuttoned (?:white )?shirt\b", "a light blue shirt with a plain navy tie")]
+
+
+def soften(prompt: str) -> str:
+    """악역이 아닌 인물의 기준 그림 문장에서 위압적인 인상을 만드는 표현을 바꾼다. 'antagonist' 가 적힌 인물은 그대로."""
+    if re.search(r"\b(antagonist|villain)\b", prompt, re.I):
+        return prompt
+    for pat, to in SOFTEN:
+        prompt = re.sub(pat, to, prompt, flags=re.I)
+    return prompt
+
+
 def generate(key: str, prompt: str, aspect: str = "9:16", quality: str = "medium", photo: bool = True,
              style: str = "cut") -> bytes:
     """그림 한 장 → JPG 바이트. style: ref(인물 기준) / location(장소 마스터) / cut(스틸 컷)."""
     from PIL import Image
     head, tail = STYLES.get(style, STYLES["cut"])
+    if style in ("ref", "sheet"):
+        prompt = soften(prompt)
     if TEXT_OK in prompt:                              # 글자가 인쇄된 소품(임시출입증 등)이 있는 컷: 그 글자만 허용
         tail = tail.replace("No text, no letters, no logo, no watermark anywhere in the image.",
                             "No logo, no watermark, and no writing other than the printed text named above.")
@@ -155,6 +181,8 @@ def edit(key: str, prompt: str, refs: list[tuple[str, bytes]], aspect: str = "9:
         return generate(key, prompt, aspect, quality, style=style)
     from openai import OpenAI
     head, tail = STYLES.get(style, STYLES["cut"])
+    if style in ("ref", "sheet"):
+        prompt = soften(prompt)
     if TEXT_OK in prompt:                              # 글자가 인쇄된 소품(임시출입증 등)이 있는 컷: 그 글자만 허용
         tail = tail.replace("No text, no letters, no logo, no watermark anywhere in the image.",
                             "No logo, no watermark, and no writing other than the printed text named above.")
