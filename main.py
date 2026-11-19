@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.8.3"
+VERSION = "v1.8.4"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -219,6 +219,13 @@ def apply_bible(work: dict, newb: dict) -> list[str]:
     loc = work.get("loc", {})
     old_name = {l["id"]: l["name"] for l in old.get("locations", [])}
     new_id = {l["name"]: l["id"] for l in newb.get("locations", [])}
+    # 확정 그림이 지금 정리가 아니라 새로 넣는 정리의 이름으로 골라져 있으면 (예전 정리 파일로 되돌리는 경우), 장소 번호도 이미 그 정리의 것이다
+    picked = {n for n, v in cast.items() if v.get("pick")}
+    under_new = len(picked & {c["name"] for c in newb.get("characters", [])})
+    under_old = len(picked & {c["name"] for c in old.get("characters", [])})
+    if under_new > under_old and not any(v.get("name") for v in loc.values()):
+        old_name = {}
+        notes.append("확정 그림이 이 작품 정리의 이름으로 골라져 있어 장소 번호는 그대로 둡니다")
     if loc and (old_name or any(v.get("name") for v in loc.values())):
         moved, orphan = {}, work.setdefault("loc_orphan", {})
         for oid, v in loc.items():
@@ -904,6 +911,24 @@ elif cur == "cast":
     chars_all, locs_all = chars_ranked(work), locs_ranked(work)
     a, b = stage_counts(work)["cast"]
     brief("cast", f"확정 {cast_split(work)}" + (" · 캐스팅 완료" if b and a >= b else ""))
+    # 작품 정리가 바뀌어 이름이 달라진 확정 그림 (한세영 → 세영): 버튼 한 번으로 새 이름에 이어 붙인다
+    _cast = work.get("cast", {})
+    _ren = []
+    for ch in (work.get("bible") or {}).get("characters", []):
+        if _cast.get(ch["name"], {}).get("pick"):
+            continue
+        cand_ = [o for o in (ch.get("aliases") or []) if _cast.get(o, {}).get("pick")]
+        if len(cand_) == 1:
+            _ren.append((cand_[0], ch["name"]))
+    if _ren:
+        st.markdown(f"<div class='cut'><div class='h'>예전 이름으로 확정된 그림 {len(_ren)}명</div><div class='s'>작품 정리가 바뀌면서 이름이 달라졌습니다: "
+                    + " · ".join(f"{o} → {n}" for o, n in _ren) + ". 새로 뽑지 않고 확정 그림을 그대로 이어 붙입니다.</div></div>", unsafe_allow_html=True)
+        if st.button(f"① 확정 그림 이어 받기 ({len(_ren)}명)", type="primary", key="cast_carry"):
+            import copy as _copy
+            for o, n in _ren:
+                _cast[n] = _copy.deepcopy(_cast[o])
+            save(work)
+            st.rerun()
     picks = [(f"01_CAST_FINAL/{c}_ref_{vw}.jpg", k) for c, v in work.get("cast", {}).items() for vw, k in sheet_of(v).items()] + \
             [(f"02_MAKEUP_COSTUME/{c}_{ln}_{vw}.jpg", k) for c, v in work.get("cast", {}).items()
              for ln, li in (v.get("looks") or {}).items() for vw, k in sheet_of(li).items()] + \
