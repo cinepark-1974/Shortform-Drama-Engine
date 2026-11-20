@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.8.7"
+VERSION = "v1.8.8"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -182,6 +182,8 @@ def emblem_of(work: dict, loc_id: str, loc_name: str = "") -> str:
 @st.cache_data(show_spinner=False, ttl=600)
 @st.cache_data(max_entries=400, show_spinner=False)
 def img_bytes(key: str):
+    if key.startswith("asset:"):                     # 저장소에 넣어 둔 그림 (assets/ 아래)
+        return (Path(__file__).parent / "assets" / key[6:]).read_bytes()
     if key.startswith("repo:"):
         return (EMBLEMS / key[5:]).read_bytes()
     return store.get_bytes(key)      # 그림 파일 이름은 매번 새로 만들어지므로 저장해 두고 다시 써도 안전
@@ -727,6 +729,73 @@ with st.sidebar:
     MODEL = KEYS.get("CLAUDE_MODEL", "")
 
 work = store.load_work(st.session_state["wid"]) if st.session_state.get("wid") else None
+
+
+def apply_setup(work: dict) -> list[str]:
+    """저장소 assets/locations/<작품>/setup.json 을 한 번만 적용한다 (Claude 가 저장소로 넣어 준 확정 장소 그림·의상).
+    지금 확정 그림은 후보 칸에 남겨 되돌릴 수 있게 한다. → 바꾼 내용"""
+    notes = []
+    for f in sorted((Path(__file__).parent / "assets" / "locations").glob("*/setup.json")):
+        try:
+            cfg = json.loads(f.read_text("utf-8"))
+        except Exception:
+            continue
+        tag = f"{f.parent.name}:{cfg.get('version')}"
+        if cfg.get("work_title") != work.get("title") or tag in work.get("setups_done", []):
+            continue
+        names = {l["id"]: l["name"] for l in (work.get("bible") or {}).get("locations", [])}
+        cast_ = work.setdefault("cast", {})
+        for ch in (work.get("bible") or {}).get("characters", []):     # 예전 이름으로 확정된 얼굴을 새 이름에 이어 붙임 (한세영 → 세영)
+            if cast_.get(ch["name"], {}).get("pick"):
+                continue
+            src_ = [o for o in (ch.get("aliases") or []) if cast_.get(o, {}).get("pick")]
+            if len(src_) == 1:
+                import copy as _cp
+                keep_ = cast_.get(ch["name"], {}).get("looks")
+                cast_[ch["name"]] = _cp.deepcopy(cast_[src_[0]])
+                if keep_:
+                    cast_[ch["name"]].setdefault("looks", {}).update(keep_)
+                notes.append(f"인물 {src_[0]} → {ch['name']}")
+        for lid, v in cfg.get("locations", {}).items():
+            if names.get(lid) != v["name"]:              # 번호가 가리키는 장소가 다르면 건너뜀
+                notes.append(f"{lid}: 이름이 '{names.get(lid)}' 라서 건너뜀")
+                continue
+            info = work.setdefault("loc", {}).setdefault(lid, {})
+            k = f"asset:locations/{f.parent.name}/{v['file']}"
+            if info.get("pick") and info["pick"] != k:
+                info.setdefault("cands", []).append(info["pick"])
+            info.setdefault("cands", [])
+            if k not in info["cands"]:
+                info["cands"].append(k)
+            info["pick"] = k
+            info["emblem"] = v.get("emblem", "")
+            notes.append(f"{lid} {v['name']}")
+        for who, looks in cfg.get("looks", {}).items():
+            if who in work.get("cast", {}):
+                for ln, lv in looks.items():
+                    work["cast"][who].setdefault("looks", {}).setdefault(ln, dict(lv))
+                    notes.append(f"{who} · {ln} 의상")
+        sl = cfg.get("scene_looks", {})
+        for ek, rec in (work.get("cuts") or {}).items():
+            if ek == "1":                                 # 1화는 동결
+                continue
+            for c in rec.get("cuts", []):
+                for who, ln in (sl.get(c.get("loc")) or {}).items():
+                    if any(ch.split(":")[0] == who for ch in c.get("chars", [])) and (c.get("looks") or {}).get(who) != ln:
+                        c.setdefault("looks", {})[who] = ln
+                        work.get("stills", {}).get(ek, {}).pop(c["id"], None)
+                        notes.append(f"EP{ek} {c['id']} {who}·{ln}")
+        work.setdefault("setups_done", []).append(tag)
+    return notes
+
+
+if work:
+    _sn = apply_setup(work)
+    if _sn:
+        store.save_work(work)
+        st.session_state["setup_notes"] = _sn
+if st.session_state.get("setup_notes"):
+    st.success("저장소에서 받은 설정을 적용했습니다: " + " · ".join(st.session_state.pop("setup_notes")))
 cutter.ALL_MOVE = bool(work.get("all_move", True)) if work else True   # 모든 컷 영상(기본) / 절약
 
 # ───────── 새 작품 ─────────

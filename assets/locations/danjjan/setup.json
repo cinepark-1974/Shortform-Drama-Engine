@@ -1,0 +1,25 @@
+{
+ "work_title": "단짠단짠",
+ "version": "2026-11-20",
+ "note": "11월 11일 확정한 장소 마스터(드라이브 LOCATION_MASTER)를 지금 장소 번호에 다시 붙인다. 엠블럼: 대성그룹 건물 안만 CI.",
+ "locations": {
+  "L01": {"name": "대성그룹 로비", "file": "L01_lobby.jpg", "emblem": "repo:DAESUNG_CI.png"},
+  "L02": {"name": "대성그룹 소회의실", "file": "L02_small_meeting.jpg", "emblem": "repo:DAESUNG_CI.png"},
+  "L03": {"name": "기획팀 사무실", "file": "L03_planning_office.jpg", "emblem": "repo:DAESUNG_CI.png"},
+  "L04": {"name": "기획팀 회의실", "file": "L04_meeting_room.jpg", "emblem": "repo:DAESUNG_CI.png"},
+  "L06": {"name": "회사 복도", "file": "L06_corridor.jpg", "emblem": "repo:DAESUNG_CI.png"},
+  "L08": {"name": "오진혁 사무실", "file": "L08_ojinhyuk_office.jpg", "emblem": ""},
+  "L10": {"name": "세영의 원룸", "file": "L10_seyoung_room.jpg", "emblem": ""},
+  "L12": {"name": "카페", "file": "L12_cafe.jpg", "emblem": ""},
+  "L15": {"name": "수민의 원룸", "file": "L15_sumin_room.jpg", "emblem": ""}
+ },
+ "looks": {
+  "세영": {
+   "집": {
+    "note": "머리를 풀고 화장기 없는 얼굴, 아이보리 맨투맨, 회색 트레이닝 바지, 맨발",
+    "prompt_en": "Hair: her long hair worn down loose over the shoulders, softly tousled, no hair accessories. Make-up: a bare face with no make-up, natural skin texture. Clothing: a plain ivory crew-neck cotton sweatshirt with no print, loose grey cotton jogger pants, barefoot. No jewelry."
+   }
+  }
+ },
+ "scene_looks": {"L10": {"세영": "집"}}
+}
