@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.8.6"
+VERSION = "v1.8.7"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -1523,6 +1523,48 @@ elif cur == "cut":
             st.markdown(f"<span class='tag ok'>단역</span> {', '.join(extras)} <span class='small'>(바이블 밖 인물, 기준 이미지 없이 생성)</span>", unsafe_allow_html=True)
         if not main_iss:
             st.markdown("<span class='tag ok'>점검 통과</span> 컷 수 · 길이 · 움직임 규칙 · 대사 길이 · 첫 장면 · 금지어 모두 통과", unsafe_allow_html=True)
+        # 장면별 분장·의상: 한 장면 안에서는 같은 옷. 02 캐스팅에서 등록한 룩 중에서 고른다 (예: 세영 · 집)
+        scn = {}
+        for c in cuts:
+            for ch in c.get("chars", []):
+                w = ch.split(":")[0]
+                if w in work.get("cast", {}):
+                    scn.setdefault(c.get("scene"), {}).setdefault(w, []).append(c)
+        n_look = sum(1 for c in cuts for l in (c.get("looks") or {}).values() if l and l != "기본")
+        with st.expander(f"장면별 의상 · 기본이 아닌 의상 {n_look}컷 (엔진이 정함 · 바꿀 때만 엽니다)"):
+            st.markdown("<div class='small'>고를 수 있는 의상은 02 캐스팅 → 인물 → '분장·의상'에 등록한 룩입니다. 없으면 거기서 먼저 룩을 추가합니다 "
+                        "(예: 세영 · 집 · '머리를 풀고 화장기 없는 얼굴, 아이보리 맨투맨, 회색 트레이닝 바지'). 바꾼 장면의 스틸은 새로 그립니다.</div>",
+                        unsafe_allow_html=True)
+            for sc, who in sorted(scn.items(), key=lambda kv: (kv[0] is None, kv[0])):
+                lid_ = next((c.get("loc") or "" for c in cuts if c.get("scene") == sc), "")
+                place = {l["id"]: l["name"] for l in (work.get("bible") or {}).get("locations", [])}.get(lid_, lid_)
+                st.markdown(f"**장면 {sc}** <span class='small'>{place}</span>", unsafe_allow_html=True)
+                for w, wc in who.items():
+                    opts = ["기본"] + list((work["cast"][w].get("looks") or {}).keys())
+                    cur_ = (wc[0].get("looks") or {}).get(w) or "기본"
+                    if cur_ not in opts:
+                        opts.append(cur_)
+                    l1, l2 = st.columns([1, 2])
+                    with l1:
+                        st.markdown(f"<div class='small' style='padding-top:8px'>{w} · {len(wc)}컷</div>", unsafe_allow_html=True)
+                    with l2:
+                        nl = st.selectbox("의상", opts, index=opts.index(cur_), key=f"look_{ep_no}_{sc}_{w}", label_visibility="collapsed")
+                    if nl != cur_:
+                        ek = str(ep_no)
+                        for c in wc:
+                            c.setdefault("looks", {})[w] = nl
+                            for box in ("stills", "clips"):
+                                old = work.get(box, {}).get(ek, {}).pop(c["id"], None)
+                                if old:
+                                    work.setdefault(box + "_old", {}).setdefault(ek, []).append({"at": now(), "data": {c["id"]: old}})
+                        e_ = work.setdefault("eps", {}).setdefault(ek, {})
+                        if e_.get("still"):
+                            e_["still"] = "doing"
+                        if e_.get("clip"):
+                            e_["clip"] = "doing"
+                        e_.pop("master", None)
+                        save(work)
+                        st.rerun()
         dcuts = [c for c in cuts if c.get("dialogue")]
         n_lip = sum(1 for c in dcuts if cutter.dlg_mode(c) == "lip")
         with st.expander(f"대사 처리 방식 · 립싱크 {n_lip}컷 / 대사 {len(dcuts)}컷 (엔진이 정함 · 고칠 때만 엽니다)"):
