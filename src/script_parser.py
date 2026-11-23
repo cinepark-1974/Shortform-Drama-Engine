@@ -45,10 +45,10 @@ def _paragraphs(text: str) -> list[str]:
 
 def _split_slug(slug: str) -> dict:
     """'대성그룹 본사 — 로비. 낮. (이어서)' → place='대성그룹 본사', sub='로비', time='낮'."""
-    s = re.sub(r"\((이어서|시간 경과|회상|플래시백)[^)]*\)", "", slug).strip()
+    s = re.sub(r"\([^)]*\)", "", slug).strip()
     parts = [x.strip() for x in s.split(".") if x.strip()]
     time = ""
-    if parts and any(parts[-1].startswith(w) for w in TIME_WORDS):
+    if parts and any(re.sub(r"^(다음 날|같은 날|며칠 뒤)\s*", "", parts[-1]).startswith(w) for w in TIME_WORDS):
         time = parts.pop()
     where = ". ".join(parts)
     place, _, sub = where.partition("—")
@@ -78,14 +78,26 @@ def detect_speakers(paras: list[str]) -> list[str]:
     return sorted(names, key=len, reverse=True)
 
 
+TAB_LINE_RE = re.compile(r"^([가-힣A-Za-z][가-힣A-Za-z0-9 ]{0,11})\t")
+
+
+def tab_speakers(text: str) -> list[str]:
+    """'이름<탭>대사' 형식 대본이면 탭 앞 이름만 화자로 본다 (Shortform-Engine docx·txt 출력)."""
+    names = Counter(m.group(1).strip() for ln in text.splitlines() if (m := TAB_LINE_RE.match(ln.strip(" "))))
+    return sorted(names, key=len, reverse=True) if sum(names.values()) >= 10 else []
+
+
 def parse(text: str, speakers: list[str] | None = None) -> dict:
-    paras = _paragraphs(text)
+    raw = [ln for ln in text.splitlines() if ln.strip()]
+    paras = [re.sub(r"\s+", " ", ln).strip() for ln in raw]
+    tabbed = [bool(TAB_LINE_RE.match(ln.strip(" "))) for ln in raw]
+    tab_mode = not speakers and sum(tabbed) >= 10
     title = paras[1] if len(paras) > 1 and not EP_RE.match(paras[1]) else (paras[0] if paras else "")
-    speakers = speakers or detect_speakers(paras)
+    speakers = speakers or (tab_speakers(text) if tab_mode else []) or detect_speakers(paras)
     sp_re = re.compile(r"^(" + "|".join(map(re.escape, speakers)) + r")(?: \(([^)]*)\))? (.+)$") if speakers else None
 
     episodes, ep, sc = [], None, None
-    for p in paras:
+    for p, has_tab in zip(paras, tabbed):
         if FOOTER_RE.match(p):
             continue
         m = EP_RE.match(p)
@@ -107,7 +119,8 @@ def parse(text: str, speakers: list[str] | None = None) -> dict:
             continue
         if sc is None:
             continue
-        m = sp_re.match(p) if sp_re else None
+        # 탭 형식 대본에서는 탭이 있는 줄만 대사 ('현관문 앞에서 …' 같은 지문을 대사로 읽지 않는다)
+        m = sp_re.match(p) if sp_re and (has_tab or not tab_mode) else None
         if m:
             sc["lines"].append({"type": "dialogue", "who": m.group(1), "note": m.group(2) or "", "text": m.group(3)})
         else:
