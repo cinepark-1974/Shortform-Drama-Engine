@@ -121,7 +121,10 @@ def parse(text: str, speakers: list[str] | None = None) -> dict:
             continue
         # 탭 형식 대본에서는 탭이 있는 줄만 대사 ('현관문 앞에서 …' 같은 지문을 대사로 읽지 않는다)
         m = sp_re.match(p) if sp_re and (has_tab or not tab_mode) else None
-        if m:
+        if m and re.fullmatch(r"\(.*\)", m.group(3).strip()):
+            # '수진<탭>(거울을 본다)' 처럼 괄호뿐인 줄은 말이 없는 행동 → 지문 (더빙이 읽지 않게)
+            sc["lines"].append({"type": "action", "text": f"{m.group(1)} {m.group(3).strip()[1:-1]}"})
+        elif m:
             sc["lines"].append({"type": "dialogue", "who": m.group(1), "note": m.group(2) or "", "text": m.group(3)})
         else:
             sc["lines"].append({"type": "action", "text": p})
