@@ -51,6 +51,9 @@ def excerpt(parsed: dict, names: list[str], places, per: int = 6, bible: dict | 
         r = roles.get(n)
         if r:
             out.append(f"\n[인물 정보 {n}] {r.get('role','')} / {r.get('age','')} / 대본 표기: {', '.join(r.get('aliases', []))}")
+        base = ((bible or {}).get("_base_looks") or {}).get(n)
+        if base:                                       # 의상·분장 설계의 기본 룩: 캐스팅 그림을 이 차림으로
+            out.append(f"[설계된 기본 차림 — outfit_ko·Hair·Clothing 을 이대로] {base}")
         got = []
         forms = [n] + list((r or {}).get("aliases", []))
         for e in parsed["episodes"]:
