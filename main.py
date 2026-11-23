@@ -1232,7 +1232,7 @@ elif cur == "cast":
         DZ = work.get("design")
         if st.button("AI로 의상·분장·미술 설계 (Claude)" if not DZ else "설계 다시 하기 (Claude)", type="primary" if not DZ else "secondary",
                      disabled=not KEYS.get("ANTHROPIC_API_KEY"), key="design_go"):
-            with st.status("대본 전체를 읽고 의상·헤어메이크업·미술을 설계하는 중… (3~6분, 창을 닫지 마세요)"):
+            with st.status("의상 팀장이 대본 전체를 분석하고, 미술 감독이 세트·소품을 정하는 중… (5~8분, 창을 닫지 마세요)"):
                 DZ = design.build(KEYS["ANTHROPIC_API_KEY"], parsed, B, work.get("cast"), MODEL)
             work["design"] = DZ
             _dn = design.register(work, DZ)
@@ -1244,19 +1244,38 @@ elif cur == "cast":
             st.success(f"설계를 등록했습니다 · {len(_dn)}건: " + " · ".join(_dn[:12]) + (" …" if len(_dn) > 12 else ""))
         if DZ:
             _ln = {l["id"]: l["name"] for l in B["locations"]}
-            st.markdown("#### 의상 · 헤어메이크업")
+            st.markdown("#### 의상 팀장 · 대본 분석")
+            if DZ.get("season_ko"):
+                st.markdown(f"**계절** · {DZ['season_ko']}")
+            for an in DZ.get("analysis", []):
+                with st.expander(f"{an['who']} · {an['concept_ko'][:60]}", expanded=False):
+                    st.markdown(f"- **처지·위계**: {an['status_ko']}\n- **변화(아크)**: {an['arc_ko']}\n"
+                                f"- **색**: {' · '.join(an['palette'])}　**실루엣·소재**: {an['silhouette_ko']}\n- **다른 인물과 구별**: {an['contrast_ko']}")
+                    stg = [x for x in DZ.get("stages", []) if x["who"] == an["who"]]
+                    if stg:
+                        st.markdown("**단계**  " + "  →  ".join(f"EP{x['eps']} {x['concept_ko']}" for x in stg))
+                    if an["clues"]:
+                        st.markdown("**대본 속 단서**")
+                        st.dataframe([{"화": c["ep"], "대본": c["text"]} for c in an["clues"]], hide_index=True, width="stretch")
+            st.markdown("#### 의상 플롯 · 헤어메이크업")
             for who in [c["name"] for c in B["characters"]]:
                 rows = [c for c in DZ["costume"] if c["who"] == who]
                 if not rows:
                     continue
                 st.markdown(f"**{who}** <span class='small'>룩 {len(rows)}개" + ("" if who in work.get("cast", {}) else " · 캐스팅 후 인물 탭에 등록됩니다") + "</span>",
                             unsafe_allow_html=True)
-                st.dataframe([{"룩": c["look"], "언제": c["when_ko"], "의상": c["costume_ko"], "헤어": c["hair_ko"], "메이크업": c["makeup_ko"],
+                st.dataframe([{"룩": c["look"], "D-날": c.get("days", ""), "언제": c["when_ko"], "근거": c.get("reason_ko", ""), "의상": c["costume_ko"], "헤어": c["hair_ko"], "메이크업": c["makeup_ko"],
                                "장면": "나머지 전부" if c["look"] == "기본" else f"{len(c['scenes'])}개 · " + ", ".join(c["scenes"][:8]) + (" …" if len(c["scenes"]) > 8 else "")}
                               for c in rows], hide_index=True, width="stretch")
             if DZ.get("hmu_progress"):
                 st.markdown("**헤어메이크업 진행표** <span class='small'>화가 흐르며 바뀌는 얼굴·머리</span>", unsafe_allow_html=True)
                 st.dataframe([{"인물": h["who"], "화": h["eps"], "얼굴·머리": h["note_ko"]} for h in DZ["hmu_progress"]], hide_index=True, width="stretch")
+            if DZ.get("continuity"):
+                st.markdown("**의상 연속성 메모**", unsafe_allow_html=True)
+                st.dataframe([{"인물": x["who"], "물건": x["item"], "화": x["eps"], "메모": x["note_ko"]} for x in DZ["continuity"]], hide_index=True, width="stretch")
+            if DZ.get("extras"):
+                st.markdown("**단역 의상**", unsafe_allow_html=True)
+                st.dataframe([{"인물": x["who"], "화": x["eps"], "의상": x["costume_ko"]} for x in DZ["extras"]], hide_index=True, width="stretch")
             st.markdown("#### 미술")
             if DZ.get("sets"):
                 st.markdown("**세트 드레싱** <span class='small'>장소 마스터 그림에 들어갑니다</span>", unsafe_allow_html=True)
