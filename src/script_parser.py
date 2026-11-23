@@ -128,7 +128,10 @@ def parse(text: str, speakers: list[str] | None = None) -> dict:
             sc["lines"].append({"type": "dialogue", "who": m.group(1), "note": m.group(2) or "", "text": m.group(3)})
         else:
             sc["lines"].append({"type": "action", "text": p})
-    return {"title": title, "speakers": speakers, "episodes": episodes}
+    # 표지의 소개 글(제목과 첫 EP 사이, '시나리오'·'기획 |' 줄 제외) → 작품 정리에 넘김
+    first_ep = next((i for i, p in enumerate(paras) if EP_RE.match(p)), len(paras))
+    intro = [p for p in paras[2:first_ep] if p != title and not re.match(r"^(기획|극본|각본|연출|제작)\s*\|", p)][:8]
+    return {"title": title, "speakers": speakers, "episodes": episodes, "intro": intro}
 
 
 def summarize(parsed: dict) -> dict:

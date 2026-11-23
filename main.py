@@ -868,6 +868,12 @@ if cur == "script":
         with c1:
             if st.button("AI로 작품 정리 (Claude)", type="primary", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
                 with st.status("장면 전체를 읽고 인물·장소를 통일하는 중… (3~5분, 창을 닫지 마세요)") as s:
+                    if "intro" not in parsed:      # 예전에 올린 작품: 저장된 대본에서 표지 소개 글만 다시 읽음
+                        for _ext in ("docx", "txt"):
+                            _raw = store.get_bytes(f"works/{work['id']}/script.{_ext}")
+                            if _raw:
+                                parsed["intro"] = script_parser.parse(script_parser.read_text(_raw, f"s.{_ext}")).get("intro", [])
+                                break
                     st.session_state["bible_notes"] = apply_bible(work, bb.build(KEYS["ANTHROPIC_API_KEY"], parsed, MODEL))
                     save(work)
                     s.update(label="작품 정리 완료", state="complete")

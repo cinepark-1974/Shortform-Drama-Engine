@@ -14,7 +14,10 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 SYSTEM = """당신은 한국 숏폼 드라마의 스크립트 슈퍼바이저(연속성 담당)입니다.
 AI 영상 제작에 들어가기 전에 대본 전체의 인물·장소를 통일하고 설정 충돌을 찾습니다.
 
-입력: 장면 표 한 줄 = '화-장면|장면 머리|대사한 인물|첫 지문'
+입력: 작품 소개(표지의 제목·소개 글)와 장면 표. 장면 표 한 줄 = '화-장면|장면 머리|대사한 인물|첫 지문'
+인물의 관계·처지(role)는 작품 소개와 대사에 나온 대로 쓴다(예: 형님·작은며느리·시한부). '혹은', '추정' 같은 짐작 표현은 쓰지 않는다.
+나이는 대본에 나온 경우만 쓰고, 없으면 빈칸.
+'대사한 인물' 칸은 그 장면에서 말을 한 인물만이다. 말없이 있는 인물, 장면 중간에 들어오거나 나가는 인물, 대사 없는 장면은 정상이며 issues 가 아니다.
 이 대본은 대본 엔진(AI)이 쓴 것이라, 같은 대상의 표기가 화마다 흔들리는 것은 작가의 의도가 아니라 오기다.
 같은 인물의 집(원룸·오피스텔·아파트 등), 같은 회사(이름이 바뀌어도), 같은 사무실은 대본에 이사·이직 장면이 명시되지 않는 한
 가장 많이 나온 표기 하나로 묶는다.
@@ -31,6 +34,9 @@ AI 영상 제작에 들어가기 전에 대본 전체의 인물·장소를 통�
    eps, type, what(무엇이 어떻게 다른지 구체적으로), suggest(수정 제안 한 가지), applied(엔진에서 이미 묶은 것) 로 기록.
    eps 는 장면 표에서 그 표기가 실제로 나오는 줄의 화 번호만, 쉼표로. what 에 쓴 화 번호와 eps 는 반드시 같아야 함.
    what 에는 대본 표기를 따옴표로 그대로 인용(예: '대성미디어'(EP4) ↔ '대성그룹'(EP1)). 추측으로 만든 충돌은 쓰지 않음.
+   화자 칸과 지문의 등장 인물 차이(화자 누락·지문-화자 불일치)는 issues 로 쓰지 않는다.
+   같은 종류의 물건이 다른 장소에 다른 크기·용도로 나오면(서재의 작은 도장 금고 / 거실 장롱 아래 금고) 별개의 물건이다.
+   대본이 같은 물건이라고 밝혔는데 위치가 다를 때만 충돌로 쓴다.
 
 문장은 확정형. 대본에 없는 사실을 만들지 않음. JSON 만 출력:
 {"characters":[{"name":"","aliases":[],"role":"","age":""}],
@@ -54,7 +60,8 @@ def build(api_key: str, parsed: dict, model: str = "") -> dict:
     import anthropic
     from json_repair import repair_json
     c = anthropic.Anthropic(api_key=api_key)
-    user = f"작품: {parsed.get('title','')}\n\n" + scene_table(parsed)
+    intro = "\n".join(parsed.get("intro") or [])
+    user = f"작품: {parsed.get('title','')}\n" + (f"작품 소개:\n{intro}\n" if intro else "") + "\n" + scene_table(parsed)
     r = c.messages.create(model=model or DEFAULT_MODEL, max_tokens=16000, system=SYSTEM,
                           messages=[{"role": "user", "content": user}])
     txt = "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
@@ -64,6 +71,8 @@ def build(api_key: str, parsed: dict, model: str = "") -> dict:
 
 def validate(b: dict, parsed: dict) -> dict:
     """빠진 장면·없는 장소 id 를 표시해 둔다 (AI 응답을 그대로 믿지 않음)."""
+    # 화자 칸은 말한 인물만이므로 '화자 누락·지문-화자 불일치'는 지적이 아니다 (오탐 제거)
+    b["issues"] = [i for i in (b.get("issues") or []) if isinstance(i, dict) and "화자" not in str(i.get("type", ""))]
     b = b if isinstance(b, dict) else {}
     for k, d in (("characters", []), ("locations", []), ("scene_loc", {}), ("issues", []), ("speaker_map", {})):
         b.setdefault(k, d)
