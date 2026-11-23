@@ -29,20 +29,31 @@ AI 영상은 장면마다 그림을 새로 그리므로, 당신이 정한 옷이
    - 처지가 바뀌면 옷도 바뀐다: 색이 짙어지거나 실루엣이 정돈되는 식으로 단계(stage)를 나눈다.
    - 소품성 의상(앞치마, 가방)의 주인이 바뀌거나 처음 등장하면 그 화를 적는다. 권력·역할이 옮겨 가는 표시다.
 2. stages (단계): 인물별 의상 단계. who, eps("1-30"), concept_ko(그 단계의 옷 방향).
-3. costume (룩 = 체인지): 인물마다 룩 목록. 룩 = 머리 + 메이크업 + 옷 한 벌.
-   - 각 인물의 첫 룩 이름은 반드시 "기본"(가장 많이 나오는 평소 차림. 캐스팅 그림이 이 차림). 단계가 바뀌면 "기본"과 다른 룩으로 만든다.
-   - 다른 룩은 대본 근거가 있을 때만: 단계 변화, 외출(골프장·호텔·병원), 밤 침실, 장례, 수감, 회상·죽음 장면, 결말의 새 옷.
+3. change_signals (룩이 바뀌는 신호): 장면마다 아래 신호를 찾는다.
+   시간 경과(날짜·시간대, 다음 날) / 장소 성격(집·외출·병원·장례식장·구치소) / 행동(잠, 씻기, 싸움, 비 맞음, 울음) /
+   관계 변화(복수 결심, 신분 노출, 주도권 이동) / 신분·위장(계급 이동, 변장) / 신체 흔적(상처·멍·피·땀) / 소품 착용(반지·안경·장갑·앞치마)
+   scene('화-장면'), who, signal(위 일곱 가지 중 하나), verdict, evidence(대본 문장 짧게), note_ko.
+   verdict: "확정" = 대본에 옷·머리·얼굴이 직접 쓰여 있음 / "추론" = 장소·행동으로 바뀌어야 맞음 / "유지" = 바꾸면 연속성이 깨짐.
+4. 항목 (옷·머리·메이크업·몸에 지니는 소품은 따로 정하고, 룩에서 조합한다):
+   - wardrobe: id "W-01"…, who, desc_ko(위·아래·겉옷·신발), desc_en(영어 확정형: 색·소재·길이·핏·신발, 무늬·로고·글자 없음),
+     ban_en(그 옷이 다른 문화권·시대로 읽히지 않게 금지 요소. 예: "No hanbok, no lace, no frills, no sportswear").
+   - hair: id "H-01"…, who, desc_ko, desc_en(길이·묶음 위치·앞머리 + 결 문장 필수: 예 "lying flat against the scalp, dry matte strands, no volume"
+     — 젖은 장면만 wet). ban_en(예: "No hair accessories").
+   - makeup: id "M-01"…, who, desc_ko, desc_en(기본 / 화장함 / 울고 난 뒤 / 상처: 위치와 색 단계까지).
+   - worn: id "P-01"…, who, desc_ko, desc_en. 몸에 지니는 소품(안경·선글라스·장갑·앞치마·반지). 대본이 요구할 때만.
+5. looks (룩 = 인물 + W + H + M + P): id "LK-01"…, who, name(짧은 한국어. 각 인물의 첫 룩은 반드시 "기본" = 가장 많이 나오는 평소 차림),
+   wardrobe, hair, makeup(위 id), worn([id]), days("D-100~D-71"), when_ko, reason_ko(대본 근거),
+   verdict("확정"/"추론": 그 룩을 만든 신호의 판정), hook(true = 반전 화의 첫 3초에 변화가 보여야 하는 룩: 변신·상처·머리 자르기·결말의 새 옷),
+   filter("보통"/"높음": 씻기·침대·노출이면 높음), filter_alt_ko(높음일 때 대체 표현: 뒷모습, 어깨 위 프레임, 김, 손 접촉),
+   scenes(이 룩의 '화-장면' 목록. 기본 룩은 비움 = 목록에 없는 장면은 모두 기본).
    - 같은 D-날 같은 인물은 같은 룩(같은 날 갈아입는 장면이 대본에 있을 때만 예외).
-   - 인물당 룩 최대 7개. look 이름은 짧은 한국어. days 는 입는 D-날 범위("D-100~D-71").
-   - costume_ko(옷: 위·아래·겉옷·신발), hair_ko(머리), makeup_ko(메이크업), when_ko(언제), reason_ko(대본 근거 한 줄)
-   - desc_en: "Hair: …. Make-up: …. Clothing: …." 세 문장. 옷은 무늬 없는 단색, 브랜드·로고·글자 없음, 신발까지. 얼굴 생김새·나이는 쓰지 않는다.
-     장신구는 대본이 요구할 때만(선글라스, 안경) 하나로 고정.
-   - scenes: 이 룩을 입는 '화-장면' 목록. 기본 룩은 비운다(목록에 없는 장면은 모두 기본).
-4. hmu_progress (헤어메이크업 진행): 화가 흐르며 얼굴·머리가 바뀌는 인물만. who, eps, note_ko.
+   - 세로 9:16 화면은 상반신이 차지한다: 변화의 우선순위는 헤어·메이크업 > 상의 > 하의. 같은 옷에 머리만 푸는 변화도 별도 룩.
+   - 주연 한 명의 룩은 10화마다 3개 이하가 되게 묶는다(룩마다 기준 그림과 검수가 늘어남).
+6. hmu_progress (헤어메이크업 진행): 화가 흐르며 얼굴·머리가 바뀌는 인물만. who, eps, note_ko.
    병·시한부 설정이 있어도 대본에서 회복하거나 끝까지 기력이 있으면 병색을 짙게 진행하지 않는다. 대본에 적힌 얼굴(붉은 눈, 터진 입술, 헝클어진 머리)만.
-5. continuity (연속성 메모): 장면을 넘나드는 의상 상태. who, item, eps, note_ko.
-   예: 앞치마 주머니에 서류를 넣고 단추를 채움, 젖은 소매, 맨발/슬리퍼/구두, 코트를 입고 들어와 단추를 푼다.
-6. extras (단역): 대사가 없어도 화면에 나오는 사람(경찰·교도관 등). who, eps, costume_ko, desc_en.
+7. continuity (연속성 메모): 장면을 넘나드는 상태. who, item(옷·머리·상처·소품), eps, note_ko.
+   예: 앞치마 주머니에 서류를 넣고 단추를 채움, 젖은 소매, 맨발/슬리퍼/구두, 뺨의 멍이 다음 장면까지.
+8. extras (단역): 대사가 없어도 화면에 나오는 사람(경찰·교도관 등). who, eps, costume_ko, desc_en.
 
 규칙: 대본에 없는 사건을 만들지 않는다. 대본에 단서가 없는 부분은 인물의 처지에 맞게 정하되 확정형으로.
 'or', 'slightly', 'maybe', '또는', '정도' 금지.
@@ -50,7 +61,13 @@ JSON 만 출력:
 {"season_ko":"",
  "analysis":[{"who":"","status_ko":"","arc_ko":"","clues":[{"ep":0,"text":""}],"concept_ko":"","palette":[],"silhouette_ko":"","contrast_ko":""}],
  "stages":[{"who":"","eps":"","concept_ko":""}],
- "costume":[{"who":"","look":"기본","days":"","when_ko":"","reason_ko":"","costume_ko":"","hair_ko":"","makeup_ko":"","desc_en":"","scenes":[]}],
+ "change_signals":[{"scene":"","who":"","signal":"","verdict":"확정","evidence":"","note_ko":""}],
+ "wardrobe":[{"id":"W-01","who":"","desc_ko":"","desc_en":"","ban_en":""}],
+ "hair":[{"id":"H-01","who":"","desc_ko":"","desc_en":"","ban_en":""}],
+ "makeup":[{"id":"M-01","who":"","desc_ko":"","desc_en":""}],
+ "worn":[{"id":"P-01","who":"","desc_ko":"","desc_en":""}],
+ "looks":[{"id":"LK-01","who":"","name":"기본","wardrobe":"W-01","hair":"H-01","makeup":"M-01","worn":[],"days":"","when_ko":"","reason_ko":"",
+           "verdict":"확정","hook":false,"filter":"보통","filter_alt_ko":"","scenes":[]}],
  "hmu_progress":[{"who":"","eps":"","note_ko":""}],
  "continuity":[{"who":"","item":"","eps":"","note_ko":""}],
  "extras":[{"who":"","eps":"","costume_ko":"","desc_en":""}]}"""
@@ -143,19 +160,7 @@ def validate(d: dict, parsed: dict, bible: dict) -> dict:
     locs = {l["id"] for l in bible.get("locations", [])}
     scenes = {f"{e['ep']}-{s['no']}" for e in parsed["episodes"] for s in e["scenes"]}
     s_ = lambda x: str(x or "").strip()
-    costume = []
-    for x in d.get("costume") or []:
-        if not isinstance(x, dict) or s_(x.get("who")) not in names or not s_(x.get("look")):
-            continue
-        sc = [k for k in (x.get("scenes") or []) if s_(k) in scenes] if s_(x.get("look")) != "기본" else []
-        costume.append({"who": s_(x["who"]), "look": s_(x["look"]), "when_ko": s_(x.get("when_ko")),
-                        "days": s_(x.get("days")), "reason_ko": s_(x.get("reason_ko")),
-                        "costume_ko": s_(x.get("costume_ko")), "hair_ko": s_(x.get("hair_ko")), "makeup_ko": s_(x.get("makeup_ko")),
-                        "desc_en": s_(x.get("desc_en")), "scenes": [s_(k) for k in sc]})
-    for n in names:
-        if not any(c["who"] == n and c["look"] == "기본" for c in costume):
-            costume.insert(0, {"who": n, "look": "기본", "when_ko": "평소", "costume_ko": "", "hair_ko": "", "makeup_ko": "",
-                               "desc_en": "", "scenes": []})
+    costume = compile_looks(d, names, scenes)
     # 장면별 룩: 같은 장면에 한 인물 룩이 둘이면 먼저 적힌 것
     scene_looks: dict = {}
     for c in costume:
@@ -183,7 +188,120 @@ def validate(d: dict, parsed: dict, bible: dict) -> dict:
     return {"season_ko": s_(d.get("season_ko")), "analysis": analysis, "stages": rows("stages", ("who", "eps", "concept_ko")),
             "costume": costume, "hmu_progress": hmu, "continuity": rows("continuity", ("who", "item", "eps", "note_ko")),
             "extras": rows("extras", ("who", "eps", "costume_ko", "desc_en")),
+            "change_signals": rows("change_signals", ("scene", "who", "signal", "verdict", "evidence", "note_ko")),
+            "confirmed": list(d.get("confirmed") or []),
             "sets": sets, "props": props[:20], "scene_looks": scene_looks}
+
+
+def compile_looks(d: dict, names: set, scenes: set) -> list:
+    """옷(W)·머리(H)·메이크업(M)·몸에 지니는 소품(P)을 룩(LK)으로 조립한다. 룩 하나 = 콘티·스틸에 넘기는 한 덩어리.
+    예전 형식(costume 목록)도 그대로 받는다."""
+    s_ = lambda x: str(x or "").strip()
+    items = {}
+    for key in ("wardrobe", "hair", "makeup", "worn"):
+        for x in d.get(key) or []:
+            if isinstance(x, dict) and s_(x.get("id")):
+                items[s_(x["id"])] = {k: s_(x.get(k)) for k in ("id", "who", "desc_ko", "desc_en", "ban_en")}
+    out = []
+    if d.get("looks"):
+        base_parts = {s_(x.get("who")): x for x in d["looks"] if isinstance(x, dict) and s_(x.get("name")) == "기본"}
+        for x in d["looks"]:
+            if not isinstance(x, dict) or s_(x.get("who")) not in names or not s_(x.get("name")):
+                continue
+            bp = base_parts.get(s_(x.get("who")), {})      # 룩에 빠진 항목은 그 인물의 기본 룩 것을 씀
+            w, h, m = (items.get(s_(x.get(k)) or s_(bp.get(k)), {}) for k in ("wardrobe", "hair", "makeup"))
+            worn = [items[s_(i)] for i in (x.get("worn") or []) if s_(i) in items]
+            bans = " ".join(b for b in (w.get("ban_en"), h.get("ban_en")) if b)
+            desc = (f"Hair: {h.get('desc_en', '')} Make-up: {m.get('desc_en', '')} Clothing: {w.get('desc_en', '')}"
+                    + "".join(f" Wearing {p['desc_en']}" for p in worn) + (f" {bans}" if bans else "")).strip()
+            name = s_(x["name"])
+            out.append({"id": s_(x.get("id")), "who": s_(x["who"]), "look": name, "days": s_(x.get("days")),
+                        "when_ko": s_(x.get("when_ko")), "reason_ko": s_(x.get("reason_ko")),
+                        "verdict": "추론" if s_(x.get("verdict")) == "추론" else "확정",
+                        "hook": bool(x.get("hook")), "filter": "높음" if s_(x.get("filter")) == "높음" else "보통",
+                        "filter_alt_ko": s_(x.get("filter_alt_ko")),
+                        "parts": {"W": w.get("id", ""), "H": h.get("id", ""), "M": m.get("id", ""), "P": [p["id"] for p in worn]},
+                        "costume_ko": w.get("desc_ko", ""), "hair_ko": h.get("desc_ko", ""), "makeup_ko": m.get("desc_ko", ""),
+                        "worn_ko": ", ".join(p["desc_ko"] for p in worn),
+                        "desc_en": desc if (w or h or m) else "",
+                        "scenes": [s_(k) for k in (x.get("scenes") or []) if s_(k) in scenes] if name != "기본" else []})
+    else:
+        for x in d.get("costume") or []:
+            if not isinstance(x, dict) or s_(x.get("who")) not in names or not s_(x.get("look")):
+                continue
+            out.append({"id": "", "who": s_(x["who"]), "look": s_(x["look"]), "days": s_(x.get("days")), "when_ko": s_(x.get("when_ko")),
+                        "reason_ko": s_(x.get("reason_ko")), "verdict": "확정", "hook": False, "filter": "보통", "filter_alt_ko": "",
+                        "parts": {}, "costume_ko": s_(x.get("costume_ko")), "hair_ko": s_(x.get("hair_ko")),
+                        "makeup_ko": s_(x.get("makeup_ko")), "worn_ko": "", "desc_en": s_(x.get("desc_en")),
+                        "scenes": [s_(k) for k in (x.get("scenes") or []) if s_(k) in scenes] if s_(x.get("look")) != "기본" else []})
+    # 같은 인물 안에서 룩 이름이 겹치면 id 를 붙여 구별
+    seen = set()
+    for c in out:
+        if (c["who"], c["look"]) in seen and c["id"]:
+            c["look"] = f"{c['look']} {c['id']}"
+        seen.add((c["who"], c["look"]))
+    for n in names:
+        if not any(c["who"] == n and c["look"] == "기본" for c in out):
+            out.insert(0, {"id": "", "who": n, "look": "기본", "days": "", "when_ko": "평소", "reason_ko": "", "verdict": "확정",
+                           "hook": False, "filter": "보통", "filter_alt_ko": "", "parts": {}, "costume_ko": "", "hair_ko": "",
+                           "makeup_ko": "", "worn_ko": "", "desc_en": "", "scenes": []})
+    return out
+
+
+def look_usable(c: dict, d: dict) -> bool:
+    """확정 룩이거나, 추론 룩을 감독님이 확인한 경우만 작품에 등록·적용한다."""
+    return c.get("verdict") != "추론" or c.get("id") in set(d.get("confirmed") or []) or c.get("look") in set(d.get("confirmed") or [])
+
+
+def look_count_warnings(d: dict, parsed: dict, limit: int = 3) -> list:
+    """인물마다 10화 묶음에 쓰이는 룩 수(기본 포함)가 limit 를 넘으면 경고."""
+    out = []
+    by = {}
+    for c in d.get("costume", []):
+        for k in c["scenes"]:
+            ep = int(k.split("-")[0])
+            by.setdefault((c["who"], (ep - 1) // 10), set()).add(c["look"])
+    for (who, blk), looks in sorted(by.items()):
+        n = len(looks | {"기본"})
+        if n > limit:
+            out.append(f"{who} · EP{blk * 10 + 1}~{blk * 10 + 10}: 룩 {n}개 ({', '.join(sorted(looks))} + 기본). {limit}개 이하로 묶는 것을 권합니다.")
+    return out
+
+
+def sheets(d: dict, parsed: dict, bible: dict) -> dict:
+    """프리프로덕션 출력물: 브레이크다운 시트(장면별) · 연속성 표(항목 × 장면) · 생성 블록(룩별 장면 묶음)."""
+    from src import bible as bb, cutter
+    nm = cutter.name_map(bible)
+    look_of = {(c["who"], c["look"]): c for c in d.get("costume", [])}
+    base = {c["who"]: c for c in d.get("costume", []) if c["look"] == "기본"}
+    sl = d.get("scene_looks") or {}
+    props = d.get("props", [])
+    breakdown, cont_cols, cont = [], [], {}
+    for e in parsed["episodes"]:
+        for s in e["scenes"]:
+            k = f"{e['ep']}-{s['no']}"
+            cont_cols.append(k)
+            who = sorted({nm.get(l["who"].replace(" ", ""), l["who"]) for l in s["lines"] if l["type"] == "dialogue"} | set(sl.get(k, {})))
+            loc = (bb.loc_of(bible, e["ep"], s["no"]) or {})
+            pr = [p["name"] for p in props if str(e["ep"]) in [x.strip() for x in p.get("eps", "").split(",")]]
+            for w in who:
+                c = look_of.get((w, sl.get(k, {}).get(w, "기본"))) or base.get(w) or {}
+                breakdown.append({"장면": k, "장소": loc.get("name", ""), "배역": w, "룩": f"{c.get('id', '')} {c.get('look', '기본')}".strip(),
+                                  "의상": c.get("costume_ko", ""), "헤어": c.get("hair_ko", ""), "메이크업": c.get("makeup_ko", ""),
+                                  "몸 소품": c.get("worn_ko", ""), "소품": ", ".join(pr),
+                                  "필터": c.get("filter", "보통") + (f" → {c['filter_alt_ko']}" if c.get("filter") == "높음" else ""),
+                                  "훅 룩": "●" if c.get("hook") else ""})
+                parts = c.get("parts") or {}
+                for item, val in (("의상", parts.get("W") or c.get("costume_ko", "")[:12]), ("헤어", parts.get("H") or c.get("hair_ko", "")[:12]),
+                                  ("메이크업", parts.get("M") or c.get("makeup_ko", "")[:12]), ("몸 소품", ",".join(parts.get("P") or []))):
+                    cont.setdefault((w, item), {})[k] = val
+    blocks = []
+    for c in d.get("costume", []):
+        sc = c["scenes"] if c["look"] != "기본" else [r["장면"] for r in breakdown if r["배역"] == c["who"] and r["룩"].endswith("기본")]
+        if sc:
+            blocks.append({"룩": f"{c.get('id', '')} {c['who']} · {c['look']}".strip(), "장면 수": len(sc),
+                           "화": ", ".join(dict.fromkeys(x.split("-")[0] for x in sc))})
+    return {"breakdown": breakdown, "cont_cols": cont_cols, "continuity": cont, "blocks": blocks}
 
 
 def look_note(c: dict) -> str:
@@ -203,6 +321,8 @@ def register(work: dict, d: dict, frozen: tuple = ("1",), cuts: bool = True) -> 
             continue
         if c["look"] == "기본":
             cast[c["who"]]["design_base"] = look_note(c)
+            continue
+        if not look_usable(c, d):          # 추론 룩은 감독님 확인 뒤에 등록
             continue
         lk = cast[c["who"]].setdefault("looks", {})
         if c["look"] not in lk and c.get("desc_en"):

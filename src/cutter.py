@@ -846,6 +846,9 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None,
             tag = desc + (f", {lt[0].rstrip('. ')}" if lt else "")
         if f"{base}@정면" in pos:
             tag += f" (reference image {pos[base + '@정면']} shows the same person from the front)"
+        if f"{base}@전신" in pos:
+            tag += (f" (reference image {pos[base + '@전신']} shows the same person full body: keep this body shape and proportions"
+                    + ("; its clothing is not used" if lt and not lt[1] else "") + ")")
         who.append(f"{tag}, only the hands visible" if part == "손" else f"{tag}, seen from behind" if part == "뒷모습" else tag)
     loc = locs.get(c["loc"], ("", ""))
     tight = c["size"] in ("ECU", "CU", "INSERT")

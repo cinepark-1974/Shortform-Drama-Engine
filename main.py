@@ -1233,7 +1233,9 @@ elif cur == "cast":
         if st.button("AI로 의상·분장·미술 설계 (Claude)" if not DZ else "설계 다시 하기 (Claude)", type="primary" if not DZ else "secondary",
                      disabled=not KEYS.get("ANTHROPIC_API_KEY"), key="design_go"):
             with st.status("의상 팀장이 대본 전체를 분석하고, 미술 감독이 세트·소품을 정하는 중… (5~8분, 창을 닫지 마세요)"):
+                _old_conf = (work.get("design") or {}).get("confirmed") or []
                 DZ = design.build(KEYS["ANTHROPIC_API_KEY"], parsed, B, work.get("cast"), MODEL)
+                DZ["confirmed"] = _old_conf            # 다시 설계해도 감독님이 확인한 추론 룩은 유지
             work["design"] = DZ
             _dn = design.register(work, DZ)
             save(work)
@@ -1257,16 +1259,44 @@ elif cur == "cast":
                     if an["clues"]:
                         st.markdown("**대본 속 단서**")
                         st.dataframe([{"화": c["ep"], "대본": c["text"]} for c in an["clues"]], hide_index=True, width="stretch")
-            st.markdown("#### 의상 플롯 · 헤어메이크업")
+            if DZ.get("change_signals"):
+                with st.expander(f"룩이 바뀌는 신호 · {len(DZ['change_signals'])}건 (확정 / 추론 / 유지)"):
+                    st.dataframe([{"장면": x["scene"], "인물": x["who"], "신호": x["signal"], "판정": x["verdict"], "대본": x["evidence"], "메모": x["note_ko"]}
+                                  for x in DZ["change_signals"]], hide_index=True, width="stretch")
+            st.markdown("#### 룩북 · 의상 플롯")
+            st.markdown("<div class='small'>룩 = 인물 + 의상(W) + 헤어(H) + 메이크업(M) + 몸 소품(P). <b>확정</b> 룩은 바로 등록되고, "
+                        "<b>추론</b> 룩(장소·행동으로 짐작한 변화)은 아래에서 확인해야 등록됩니다. ● = 반전 화 첫 3초에 보여야 하는 훅 룩.</div>",
+                        unsafe_allow_html=True)
+            _conf = set(DZ.get("confirmed") or [])
             for who in [c["name"] for c in B["characters"]]:
                 rows = [c for c in DZ["costume"] if c["who"] == who]
                 if not rows:
                     continue
                 st.markdown(f"**{who}** <span class='small'>룩 {len(rows)}개" + ("" if who in work.get("cast", {}) else " · 캐스팅 후 인물 탭에 등록됩니다") + "</span>",
                             unsafe_allow_html=True)
-                st.dataframe([{"룩": c["look"], "D-날": c.get("days", ""), "언제": c["when_ko"], "근거": c.get("reason_ko", ""), "의상": c["costume_ko"], "헤어": c["hair_ko"], "메이크업": c["makeup_ko"],
+                st.dataframe([{"룩": f"{c.get('id', '')} {c['look']}".strip() + (" ●" if c.get("hook") else ""),
+                               "판정": c.get("verdict", "확정") + (" · 확인함" if c.get("verdict") == "추론" and design.look_usable(c, DZ) else ""),
+                               "D-날": c.get("days", ""), "근거": c.get("reason_ko", ""), "의상": c["costume_ko"], "헤어": c["hair_ko"],
+                               "메이크업": c["makeup_ko"], "몸 소품": c.get("worn_ko", ""),
+                               "필터": c.get("filter", "보통") + (f" → {c.get('filter_alt_ko', '')}" if c.get("filter") == "높음" else ""),
                                "장면": "나머지 전부" if c["look"] == "기본" else f"{len(c['scenes'])}개 · " + ", ".join(c["scenes"][:8]) + (" …" if len(c["scenes"]) > 8 else "")}
                               for c in rows], hide_index=True, width="stretch")
+                for c in [c for c in rows if c.get("verdict") == "추론"]:
+                    key_ = c.get("id") or c["look"]
+                    ok_ = st.checkbox(f"{who} · {c['look']} 적용 (추론: {c.get('reason_ko', '')[:50]})", value=key_ in _conf, key=f"dz_cf_{who}_{key_}")
+                    if ok_ != (key_ in _conf):
+                        (_conf.add if ok_ else _conf.discard)(key_)
+                        DZ["confirmed"] = sorted(_conf)
+                        if ok_:
+                            _dn = design.register(work, DZ)
+                        else:                          # 확인을 풀면 그 룩이 들어간 컷을 기본으로 되돌림
+                            work.get("cast", {}).get(who, {}).get("looks", {}).pop(c["look"], None)
+                            _dn = design.apply_scene_looks(work, DZ)
+                        save(work)
+                        st.session_state["design_notes"] = _dn
+                        st.rerun()
+            for wmsg in design.look_count_warnings(DZ, parsed):
+                st.warning(wmsg)
             if DZ.get("hmu_progress"):
                 st.markdown("**헤어메이크업 진행표** <span class='small'>화가 흐르며 바뀌는 얼굴·머리</span>", unsafe_allow_html=True)
                 st.dataframe([{"인물": h["who"], "화": h["eps"], "얼굴·머리": h["note_ko"]} for h in DZ["hmu_progress"]], hide_index=True, width="stretch")
@@ -1285,6 +1315,21 @@ elif cur == "cast":
                 st.markdown("**이야기 소품** <span class='small'>소품 탭에 등록되어 콘티·스틸에 같은 설명으로 들어갑니다</span>", unsafe_allow_html=True)
                 st.dataframe([{"소품": p["name"], "종류": "장소" if p["kind"] == "set" else "손", "장소": _ln.get(p["loc"], ""), "나오는 화": p["eps"],
                                "설명": p["note_ko"], "흐름": p["continuity_ko"]} for p in DZ["props"]], hide_index=True, width="stretch")
+            _sh = design.sheets(DZ, parsed, B)
+            st.markdown("#### 프리프로덕션 출력물")
+            with st.expander(f"생성 블록 · 룩 {len(_sh['blocks'])}개 (같은 룩끼리 묶어 기준 그림·스틸을 만듭니다)"):
+                st.dataframe(_sh["blocks"], hide_index=True, width="stretch")
+            _q = lambda x: '"' + str(x).replace('"', "'") + '"'
+            _bd = [",".join(_q(k) for k in _sh["breakdown"][0])] + [",".join(_q(v) for v in r.values()) for r in _sh["breakdown"]] if _sh["breakdown"] else []
+            _ct = [",".join(map(_q, ["인물", "항목"] + _sh["cont_cols"]))] + \
+                  [",".join(map(_q, [w, it] + [cells.get(k, "") for k in _sh["cont_cols"]])) for (w, it), cells in sorted(_sh["continuity"].items())]
+            d1, d2 = st.columns(2)
+            with d1:
+                st.download_button("브레이크다운 시트 (장면별, CSV)", "\n".join(_bd).encode("utf-8-sig"),
+                                   file_name=f"{work.get('title', 'work')[:20]}_브레이크다운.csv", mime="text/csv", key="dz_bd", width="stretch")
+            with d2:
+                st.download_button("연속성 표 (항목 × 장면, CSV)", "\n".join(_ct).encode("utf-8-sig"),
+                                   file_name=f"{work.get('title', 'work')[:20]}_연속성표.csv", mime="text/csv", key="dz_ct", width="stretch")
             _csv = ["구분,인물/장소,이름,언제/화,의상/설명,헤어,메이크업,장면/흐름"]
             q = lambda x: '"' + str(x).replace('"', "'") + '"'
             _csv += [",".join(map(q, ["의상", c["who"], c["look"], c["when_ko"], c["costume_ko"], c["hair_ko"], c["makeup_ko"],
@@ -1292,7 +1337,7 @@ elif cur == "cast":
             _csv += [",".join(map(q, ["헤어메이크업", h["who"], "", h["eps"], h["note_ko"], "", "", ""])) for h in DZ.get("hmu_progress", [])]
             _csv += [",".join(map(q, ["세트", _ln.get(s["loc"], s["loc"]), "", "", s["dressing_ko"], "", "", s["continuity_ko"]])) for s in DZ.get("sets", [])]
             _csv += [",".join(map(q, ["소품", _ln.get(p["loc"], ""), p["name"], p["eps"], p["note_ko"], "", "", p["continuity_ko"]])) for p in DZ.get("props", [])]
-            st.download_button("설계표 내려받기 (CSV, 엑셀에서 열림)", "\n".join(_csv).encode("utf-8-sig"),
+            st.download_button("룩북·소품표 (CSV, 엑셀에서 열림)", "\n".join(_csv).encode("utf-8-sig"),
                                file_name=f"{work.get('title', 'work')[:20]}_의상분장미술.csv", mime="text/csv", key="design_csv")
 
     with t_char:
@@ -1822,6 +1867,8 @@ elif cur == "still":
             out.append((base, sh.get(v) or sh["front"]))
             if sh.get(v) and v != "front":            # 측면·뒷모습·전신 시트를 쓸 때는 얼굴 기준으로 정면도 함께
                 out.append((f"{base}@정면", sh["front"]))
+            elif v == "front" and sh.get("full"):     # 얼굴(정면)만 붙이면 체형이 컷마다 달라짐 → 전신도 함께 (3 DAYS 규칙)
+                out.append((f"{base}@전신", sh["full"]))
         k = work.get("loc", {}).get(c["loc"], {}).get("pick")
         vk = work.get("loc", {}).get(c["loc"], {}).get("views", {}).get(c.get("view") or "", {}).get("pick")
         if vk:                                        # 시점 그림이 이 컷의 배경, 마스터는 전경 참고

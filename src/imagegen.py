@@ -82,8 +82,8 @@ LOOK_SAME = ("The same person as the reference image: identical face, identical 
              "The hair, make-up and clothing of the reference are replaced by the look described here. "
              "Front view, vertical framing from the top of the head to the upper hips, neutral relaxed expression. Look: ")
 VIEWS = {
-    "side": ("3/4", "3:4", SAME + "Three-quarter view: body and face turned 45 degrees to the camera's left, eyes looking past "
-             "the camera. Vertical framing from the top of the head to the upper hips."),
+    "side": ("3/4", "3:4", SAME + "Three-quarter view: head, shoulders, chest and hips all turned together 45 degrees to the camera's left, "
+             "no twist at the neck, eyes looking past the camera. Vertical framing from the top of the head to the upper hips."),
     "full": ("전신", "9:16", SAME + "Full-body front view from the top of the head to the shoes, standing straight, arms relaxed "
              "at the sides, the whole outfit and plain shoes visible, space above the head and below the feet."),
     "back": ("뒷모습", "9:16", SAME + "Back view from directly behind, full body from the head to the shoes, standing straight, "
