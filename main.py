@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, design, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.9.5"
+VERSION = "v1.9.6"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -1215,6 +1215,65 @@ elif cur == "cast":
                     save(work)
                     st.rerun()
 
+    def master_upload(c, info):
+        """캐릭터 마스터 세트(상반신·헤드샷·전신·측면·뒷모습)를 한 번에 올린다. 파일 이름으로 칸을 짐작하고, 칸은 바꿀 수 있다."""
+        slots = [("front", "상반신 정면 (확정)"), ("head", "헤드샷"), ("full", "전신"), ("side", "측면·3/4"), ("back", "뒷모습"), ("skip", "올리지 않음")]
+        guess_rules = [("head", r"헤드|head|얼굴|face|클로즈"), ("side", r"측면|옆|side|profile|3_?4"), ("back", r"뒷|back|rear"),
+                       ("full", r"전신|full|body|몸"), ("front", r"상반신|정면|front|upper|bust")]
+        with st.expander("마스터 세트 한 번에 올리기 (여러 장)", expanded=not info.get("pick")):
+            ups = st.file_uploader("그림 여러 장을 한꺼번에 끌어다 놓으세요", type=["png", "jpg", "jpeg", "webp"],
+                                   accept_multiple_files=True, key=f"mu_{c}_{info.get('mu_n', 0)}")
+            if not ups:
+                st.caption("파일 이름에 ‘상반신·헤드샷·전신·측면·뒷모습’이 들어 있으면 칸을 자동으로 맞춥니다.")
+                return
+            from io import BytesIO
+            from PIL import Image
+            used, plan = set(), []
+            for i, f in enumerate(ups):
+                hit = [k for k, pat in guess_rules if re.search(pat, f.name, re.I)]
+                g = next((k for k in hit if k not in used), "skip" if hit else None)   # 이름이 겹치면(헤드샷2) 올리지 않음
+                if g is None:                          # 이름으로 모르면 비율로: 세로가 길면 전신, 아니면 상반신
+                    im0 = Image.open(BytesIO(f.getvalue()))
+                    g = next((k for k in (["full", "side", "back"] if im0.height > im0.width * 1.4 else ["front", "head"]) if k not in used), "skip")
+                used.add(g)
+                c1, c2 = st.columns([1, 3])
+                with c1:
+                    st.image(f.getvalue(), width="stretch")
+                with c2:
+                    sel = st.selectbox(f.name, [k for k, _ in slots], index=[k for k, _ in slots].index(g),
+                                       format_func=dict(slots).get, key=f"mus_{c}_{i}_{f.file_id}")
+                plan.append((f, sel))
+            fronts = [f for f, k in plan if k == "front"]
+            if len(fronts) > 1:
+                st.warning("상반신 정면은 한 장만 고르세요.")
+            elif not fronts and not info.get("pick"):
+                st.warning("상반신 정면을 한 장 골라야 나머지 칸이 그 사람의 시트로 묶입니다.")
+            elif st.button("이 칸들로 등록", type="primary", key=f"mug_{c}"):
+                base = f"works/{work['id']}/cast/{slug(c)}"
+
+                def jpg(f):
+                    im = Image.open(BytesIO(f.getvalue())).convert("RGB")
+                    im.thumbnail((2048, 2048))
+                    buf = BytesIO()
+                    im.save(buf, "JPEG", quality=92)
+                    return buf.getvalue()
+                for f in fronts:
+                    k = f"{base}/up_{uuid.uuid4().hex[:6]}.jpg"
+                    store.put_bytes(k, jpg(f), "image/jpeg")
+                    info.setdefault("cands", []).append(k)
+                    info["pick"] = k
+                if info.get("views_of") != info["pick"]:
+                    info["views"], info["views_of"] = {}, info["pick"]
+                for f, v in plan:
+                    if v in ("front", "skip"):
+                        continue
+                    k = f"{base}/sheet_{v}_up_{uuid.uuid4().hex[:6]}.jpg"
+                    store.put_bytes(k, jpg(f), "image/jpeg")
+                    info["views"][v] = k
+                info["mu_n"] = info.get("mu_n", 0) + 1        # 올리기 칸 비우기
+                save(work)
+                st.rerun()
+
     def looks_board(c, info):
         """분장·의상 (Make-up & Costume): 인물마다 머리·분장·옷 묶음(룩)을 여러 개 고정해 둔다.
         '기본'은 위에서 확정한 캐스팅 그림의 차림. 콘티가 장면마다 룩 하나를 고르고, 그 룩의 그림이 컷의 기준 그림이 된다."""
@@ -1470,6 +1529,7 @@ elif cur == "cast":
                                     language=None, wrap_lines=True)
                     elif not info.get("prompt_en"):
                         st.caption("지시문이 아직 없습니다. ‘프로필 초안 만들기’를 먼저 누르세요.")
+                master_upload(c, info)
                 asset_board("cast", c, c, info, "3:4", 4)
                 if info.get("pick"):
                     sheet_board(c, info)
