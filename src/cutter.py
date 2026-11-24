@@ -834,7 +834,10 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None,
     for ch in c["chars"]:
         base, _, part = ch.partition(":")
         desc = cast.get(base, base)
-        lt = (look_text or {}).get(base)               # (룩 영어 설명, 룩 기준 그림이 있는가)
+        lt = (look_text or {}).get(base)               # (룩 영어 설명, 룩 기준 그림이 있는가, 이 장면의 상태)
+        st_ = lt[2] if lt and len(lt) > 2 else ""
+        if lt and not lt[0]:                           # 룩 없이 상태만: 아래는 평소대로, 끝에 흔적만 더함
+            lt = None
         if base in pos and lt and not lt[1]:           # 룩 그림이 아직 없음: 얼굴만 기준 그림에서, 머리·분장·옷은 글로
             tag = (f"the person in reference image {pos[base]}: the same face only; the hair, make-up and clothing of that "
                    f"reference are replaced by this look: {lt[0].rstrip('. ')}")
@@ -851,6 +854,8 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None,
         if f"{base}@전신" in pos:
             tag += (f" (reference image {pos[base + '@전신']} shows the same person full body: keep this body shape and proportions"
                     + ("; its clothing is not used" if lt and not lt[1] else "") + ")")
+        if st_:
+            tag += f"; in this scene only, add: {st_.rstrip('. ')}"
         who.append(f"{tag}, only the hands visible" if part == "손" else f"{tag}, seen from behind" if part == "뒷모습" else tag)
     loc = locs.get(c["loc"], ("", ""))
     tight = c["size"] in ("ECU", "CU", "INSERT")

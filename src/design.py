@@ -49,6 +49,9 @@ AI 영상은 장면마다 그림을 새로 그리므로, 당신이 정한 옷이
    - 같은 D-날 같은 인물은 같은 룩(같은 날 갈아입는 장면이 대본에 있을 때만 예외).
    - 세로 9:16 화면은 상반신이 차지한다: 변화의 우선순위는 헤어·메이크업 > 상의 > 하의. 같은 옷에 머리만 푸는 변화도 별도 룩.
    - 주연 한 명의 룩은 10화마다 3개 이하가 되게 묶는다(룩마다 기준 그림과 검수가 늘어남).
+   - 옷·머리·몸 소품이 같고 메이크업·상처만 다르면 룩이 아니다(울고 난 눈, 손등 발적, 뺨의 멍). 그것은 states 에 쓴다.
+5-1. states (상태 = 룩 위에 얹는 얼굴·몸 흔적): who, name, makeup_ko, makeup_en(영어 확정형: 위치·색·크기), scenes('화-장면' 목록).
+   그 장면의 룩은 그대로 두고 이 흔적만 더한다. 룩 그림을 따로 만들지 않는다.
 6. hmu_progress (헤어메이크업 진행): 화가 흐르며 얼굴·머리가 바뀌는 인물만. who, eps, note_ko.
    병·시한부 설정이 있어도 대본에서 회복하거나 끝까지 기력이 있으면 병색을 짙게 진행하지 않는다. 대본에 적힌 얼굴(붉은 눈, 터진 입술, 헝클어진 머리)만.
 7. continuity (연속성 메모): 장면을 넘나드는 상태. who, item(옷·머리·상처·소품), eps, note_ko.
@@ -68,6 +71,7 @@ JSON 만 출력:
  "worn":[{"id":"P-01","who":"","desc_ko":"","desc_en":""}],
  "looks":[{"id":"LK-01","who":"","name":"기본","wardrobe":"W-01","hair":"H-01","makeup":"M-01","worn":[],"days":"","when_ko":"","reason_ko":"",
            "verdict":"확정","hook":false,"filter":"보통","filter_alt_ko":"","scenes":[]}],
+ "states":[{"who":"","name":"","makeup_ko":"","makeup_en":"","scenes":[]}],
  "hmu_progress":[{"who":"","eps":"","note_ko":""}],
  "continuity":[{"who":"","item":"","eps":"","note_ko":""}],
  "extras":[{"who":"","eps":"","costume_ko":"","desc_en":""}]}"""
@@ -185,7 +189,15 @@ def validate(d: dict, parsed: dict, bible: dict) -> dict:
                              "concept_ko": s_(x.get("concept_ko")), "palette": [s_(p) for p in (x.get("palette") or [])][:4],
                              "silhouette_ko": s_(x.get("silhouette_ko")), "contrast_ko": s_(x.get("contrast_ko"))})
     rows = lambda key, fields: [{f: s_(x.get(f)) for f in fields} for x in d.get(key) or [] if isinstance(x, dict) and s_(x.get(fields[0]))]
-    return {"season_ko": s_(d.get("season_ko")), "analysis": analysis, "stages": rows("stages", ("who", "eps", "concept_ko")),
+    states = [{"who": s_(x.get("who")), "name": s_(x.get("name")), "makeup_ko": s_(x.get("makeup_ko")), "makeup_en": s_(x.get("makeup_en")),
+               "scenes": [s_(k) for k in (x.get("scenes") or []) if s_(k) in scenes]}
+              for x in (d.get("states") or []) + d.pop("_folded_states", []) if isinstance(x, dict) and s_(x.get("who")) in names and s_(x.get("makeup_en"))]
+    scene_states: dict = {}
+    for x in states:
+        for k in x["scenes"]:
+            cur = scene_states.setdefault(k, {}).get(x["who"])
+            scene_states[k][x["who"]] = (cur + "; " if cur else "") + x["makeup_en"]
+    return {"season_ko": s_(d.get("season_ko")), "states": states, "scene_states": scene_states, "analysis": analysis, "stages": rows("stages", ("who", "eps", "concept_ko")),
             "costume": costume, "hmu_progress": hmu, "continuity": rows("continuity", ("who", "item", "eps", "note_ko")),
             "extras": rows("extras", ("who", "eps", "costume_ko", "desc_en")),
             "change_signals": rows("change_signals", ("scene", "who", "signal", "verdict", "evidence", "note_ko")),
@@ -234,6 +246,22 @@ def compile_looks(d: dict, names: set, scenes: set) -> list:
                         "parts": {}, "costume_ko": s_(x.get("costume_ko")), "hair_ko": s_(x.get("hair_ko")),
                         "makeup_ko": s_(x.get("makeup_ko")), "worn_ko": "", "desc_en": s_(x.get("desc_en")),
                         "scenes": [s_(k) for k in (x.get("scenes") or []) if s_(k) in scenes] if s_(x.get("look")) != "기본" else []})
+    # 옷·머리·몸 소품이 기본 룩과 같고 메이크업만 다른 룩 → 상태(state)로 옮긴다 (같은 옷 그림을 또 만들지 않게)
+    base_of = {c["who"]: c for c in out if c["look"] == "기본"}
+    kept, folded = [], []
+    for c in out:
+        b = base_of.get(c["who"])
+        p, bp = c.get("parts") or {}, (b or {}).get("parts") or {}
+        same_body = b is not None and c["look"] != "기본" and p and bp and p.get("W") == bp.get("W") and p.get("H") == bp.get("H") \
+            and sorted(p.get("P") or []) == sorted(bp.get("P") or [])
+        if not same_body:
+            kept.append(c)
+        elif p.get("M") != bp.get("M"):
+            m = items.get(p.get("M"), {})
+            folded.append({"who": c["who"], "name": c["look"], "makeup_ko": m.get("desc_ko", c.get("makeup_ko", "")),
+                           "makeup_en": m.get("desc_en", ""), "scenes": c["scenes"]})
+    out = kept
+    d["_folded_states"] = folded
     # 같은 인물 안에서 룩 이름이 겹치면 id 를 붙여 구별
     seen = set()
     for c in out:
@@ -357,6 +385,15 @@ def apply_scene_looks(work: dict, d: dict, eps: list | None = None, frozen: tupl
             continue
         for c in rec.get("cuts", []):
             want = sl.get(f"{ek}-{c.get('scene')}", {})
+            stt = ((d or {}).get("scene_states") or {}).get(f"{ek}-{c.get('scene')}", {})
+            stt = {w: v for w, v in stt.items() if w in [ch.split(":")[0] for ch in c.get("chars", [])]}
+            if (c.get("state") or {}) != stt:            # 상태(울고 난 눈·상처): 룩은 그대로, 흔적만 더함
+                if stt:
+                    c["state"] = stt
+                else:
+                    c.pop("state", None)
+                work.get("stills", {}).get(ek, {}).pop(c.get("id"), None)
+                notes.append(f"EP{ek} {c.get('id')} 상태")
             for ch in c.get("chars", []):
                 who = ch.split(":")[0]
                 ln = want.get(who, "기본")

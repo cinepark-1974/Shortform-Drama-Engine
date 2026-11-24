@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, design, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.9.6"
+VERSION = "v1.9.7"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -303,10 +303,13 @@ def look_text(work: dict, c: dict) -> dict:
     """컷에 배정된 룩 → {인물: (영어 설명, 룩 기준 그림이 있는가)}. 스틸 지시문에 들어간다."""
     out = {}
     names = dict.fromkeys(list((c.get("looks") or {}).keys()) + [ch.split(":")[0] for ch in c.get("chars", [])])
-    for w in names:
+    stt = c.get("state") or {}
+    for w in dict.fromkeys(list(names) + list(stt)):
         li = look_info(work, w, (c.get("looks") or {}).get(w))
         if li and li.get("prompt_en"):
-            out[w] = (li["prompt_en"], bool(li.get("pick")))
+            out[w] = (li["prompt_en"], bool(li.get("pick")), stt.get(w, ""))
+        elif stt.get(w):                          # 룩 없이 상태만 (울고 난 눈·상처)
+            out[w] = ("", True, stt[w])
     return out
 
 
@@ -1294,9 +1297,16 @@ elif cur == "cast":
                 looks[ln.strip()] = {"prompt_en": d, "note": lm.strip()}
                 save(work)
                 st.rerun()
+        def _seg(t, k):
+            m = re.search(rf"{k}:(.*?)(?:Make-up:|Clothing:|Hair:|$)", t or "", re.S)
+            return re.sub(r"\s+", " ", m.group(1)).strip().lower() if m else ""
+        _base = looks.get(info.get("default_look") or "", {}).get("prompt_en", "")
         for name in list(looks):
             li = looks[name]
             state = "그림 확정" if li.get("pick") else "그림 없음 · 글 설명으로만 들어감"
+            if _base and name != info.get("default_look") and _seg(li.get("prompt_en"), "Hair") == _seg(_base, "Hair") \
+                    and _seg(li.get("prompt_en"), "Clothing") == _seg(_base, "Clothing"):
+                st.caption(f"‘{name}’은 기본 룩과 옷·머리가 같고 메이크업만 다릅니다. 설계를 다시 하면 ‘상태’로 옮겨집니다. 그림이 필요 없으면 이 룩을 삭제하세요.")
             st.markdown(f"<div class='cut'><div class='h'>{c} · {name} <span class='tag {'ok' if li.get('pick') else 'todo'}'>{state}</span></div>"
                         f"<div class='s'>{li.get('note', '')}</div></div>", unsafe_allow_html=True)
             if st.toggle("이 룩 열기", key=f"lk_open_{c}_{name}", value=not li.get("pick")):
@@ -1389,6 +1399,11 @@ elif cur == "cast":
             if DZ.get("hmu_progress"):
                 st.markdown("**헤어메이크업 진행표** <span class='small'>화가 흐르며 바뀌는 얼굴·머리</span>", unsafe_allow_html=True)
                 st.dataframe([{"인물": h["who"], "화": h["eps"], "얼굴·머리": h["note_ko"]} for h in DZ["hmu_progress"]], hide_index=True, width="stretch")
+            if DZ.get("states"):
+                st.markdown("**상태 (룩 위에 얹는 흔적)** <span class='small'>옷·머리는 그 장면의 룩 그대로, 얼굴·몸 흔적만 더합니다. 룩 그림을 따로 만들지 않습니다.</span>",
+                            unsafe_allow_html=True)
+                st.dataframe([{"인물": x["who"], "상태": x["name"], "흔적": x["makeup_ko"], "장면": ", ".join(x["scenes"][:10]) + (" …" if len(x["scenes"]) > 10 else "")}
+                              for x in DZ["states"]], hide_index=True, width="stretch")
             if DZ.get("continuity"):
                 st.markdown("**의상 연속성 메모**", unsafe_allow_html=True)
                 st.dataframe([{"인물": x["who"], "물건": x["item"], "화": x["eps"], "메모": x["note_ko"]} for x in DZ["continuity"]], hide_index=True, width="stretch")
