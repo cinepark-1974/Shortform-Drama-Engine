@@ -197,7 +197,7 @@ def validate(d: dict, parsed: dict, bible: dict) -> dict:
         for k in x["scenes"]:
             cur = scene_states.setdefault(k, {}).get(x["who"])
             scene_states[k][x["who"]] = (cur + "; " if cur else "") + x["makeup_en"]
-    return {"season_ko": s_(d.get("season_ko")), "states": states, "scene_states": scene_states, "analysis": analysis, "stages": rows("stages", ("who", "eps", "concept_ko")),
+    return {"states_v": 1, "season_ko": s_(d.get("season_ko")), "states": states, "scene_states": scene_states, "analysis": analysis, "stages": rows("stages", ("who", "eps", "concept_ko")),
             "costume": costume, "hmu_progress": hmu, "continuity": rows("continuity", ("who", "item", "eps", "note_ko")),
             "extras": rows("extras", ("who", "eps", "costume_ko", "desc_en")),
             "change_signals": rows("change_signals", ("scene", "who", "signal", "verdict", "evidence", "note_ko")),
@@ -274,6 +274,53 @@ def compile_looks(d: dict, names: set, scenes: set) -> list:
                            "hook": False, "filter": "보통", "filter_alt_ko": "", "parts": {}, "costume_ko": "", "hair_ko": "",
                            "makeup_ko": "", "worn_ko": "", "desc_en": "", "scenes": []})
     return out
+
+
+def fold_existing(work: dict, delete=None) -> list:
+    """이미 등록된 작품 정리 (v1.9.7 이전 설계): 기본 룩과 옷·머리·몸 소품이 같고 메이크업만 다른 룩을
+    상태로 옮기고, 인물의 룩 목록과 그 룩 그림을 지운다. 한 번만 돈다 (design.states_v)."""
+    d = work.get("design") or {}
+    if not d or d.get("states_v") == 1:
+        return []
+    notes, keep = [], []
+    base = {c["who"]: c for c in d.get("costume", []) if c["look"] == "기본"}
+    states = list(d.get("states") or [])
+    for c in d.get("costume", []):
+        b = base.get(c["who"])
+        p, bp = c.get("parts") or {}, (b or {}).get("parts") or {}
+        seg = lambda t, k: re.sub(r"\s+", " ", (re.search(rf"{k}:(.*?)(?:Hair:|Make-up:|Clothing:|$)", t or "", re.S) or [None, ""])[1]).strip().lower()
+        same_txt = b is not None and not (p and bp) and c.get("desc_en") and b.get("desc_en") \
+            and seg(c["desc_en"], "Hair") == seg(b["desc_en"], "Hair") and seg(c["desc_en"], "Clothing") == seg(b["desc_en"], "Clothing")
+        if c["look"] != "기본" and (same_txt or (p and bp and p.get("W") == bp.get("W") and p.get("H") == bp.get("H")
+                                               and sorted(p.get("P") or []) == sorted(bp.get("P") or []))):
+            m = re.search(r"Make-up:(.*?)(?:Clothing:|$)", c.get("desc_en", ""), re.S)
+            mk = re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
+            if mk and (same_txt or p.get("M") != bp.get("M")):
+                states.append({"who": c["who"], "name": c["look"], "makeup_ko": c.get("makeup_ko", ""), "makeup_en": mk, "scenes": c["scenes"]})
+            li = work.get("cast", {}).get(c["who"], {}).get("looks", {}).pop(c["look"], None)
+            if li and delete:                          # 그 룩의 그림 파일도 지움
+                for k in set((li.get("cands") or []) + [li.get("pick")] + list((li.get("views") or {}).values())):
+                    if k:
+                        try:
+                            delete(k)
+                        except Exception:
+                            pass
+            notes.append(f"{c['who']} · {c['look']} → 상태")
+        else:
+            keep.append(c)
+    d["costume"] = keep
+    d["states"] = states
+    sl, ss = {}, {}
+    for c in keep:
+        for k in c["scenes"]:
+            sl.setdefault(k, {}).setdefault(c["who"], c["look"])
+    for x in states:
+        for k in x["scenes"]:
+            cur = ss.setdefault(k, {}).get(x["who"])
+            ss[k][x["who"]] = (cur + "; " if cur else "") + x["makeup_en"]
+    d["scene_looks"], d["scene_states"], d["states_v"] = sl, ss, 1
+    notes += apply_scene_looks(work, d)
+    return notes
 
 
 def look_usable(c: dict, d: dict) -> bool:

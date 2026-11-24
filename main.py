@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, design, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.9.7"
+VERSION = "v1.9.8"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -1038,6 +1038,11 @@ elif cur == "cast":
             return buf.getvalue()
         st.download_button(f"확정 그림 {len(picks)}장 내려받기 (드라이브용 이름 정리, zip)", _zip, file_name=f"casting_{work['id']}.zip",
                            mime="application/zip", help="01_CAST_FINAL · 02_MAKEUP_COSTUME · 03_LOCATION_MASTER · 04_PROP · 05_EMBLEM 폴더로 나뉘고, 이름이 '인물_ref_front', '장소번호_장소_master' 로 정리됩니다. 압축을 풀어 드라이브 작업 폴더에 그대로 올리면 됩니다.")
+    if work.get("design") and work["design"].get("states_v") != 1:   # 예전 설계: 메이크업만 다른 룩을 상태로 옮기고 그 룩·그림 삭제
+        _fn = design.fold_existing(work, delete=store.delete)
+        save(work)
+        if _fn:
+            st.success("룩 정리: " + " · ".join(n for n in _fn if "→" in n) + " (그림 삭제, 장면에는 상태로 들어갑니다)")
     if work.get("design"):                    # 캐스팅이 확정된 인물의 룩·소품·세트 드레싱을 조용히 등록 (컷은 건드리지 않음)
         if design.register(work, work["design"], cuts=False):
             save(work)
