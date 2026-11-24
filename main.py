@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, design, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.9.3"
+VERSION = "v1.9.4"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -289,17 +289,22 @@ def sheet_of(info: dict) -> dict:
 
 
 def look_info(work: dict, name: str, look: str | None):
-    """인물의 분장·의상(룩) 정보. '기본'이거나 등록되지 않은 룩이면 None (확정 캐스팅 그림을 씀)."""
+    """인물의 분장·의상(룩) 정보. '기본'이거나 등록되지 않은 룩이면 None (확정 캐스팅 그림을 씀).
+    캐릭터 마스터(기본복) 방식이면 '기본'도 인물의 기본 룩(default_look)을 입힌다."""
+    info = work.get("cast", {}).get(name, {})
     if not look or look == "기본":
+        if work.get("master_mode") and info.get("default_look"):
+            return (info.get("looks") or {}).get(info["default_look"])
         return None
-    return (work.get("cast", {}).get(name, {}).get("looks") or {}).get(look)
+    return (info.get("looks") or {}).get(look)
 
 
 def look_text(work: dict, c: dict) -> dict:
     """컷에 배정된 룩 → {인물: (영어 설명, 룩 기준 그림이 있는가)}. 스틸 지시문에 들어간다."""
     out = {}
-    for w, l in (c.get("looks") or {}).items():
-        li = look_info(work, w, l)
+    names = dict.fromkeys(list((c.get("looks") or {}).keys()) + [ch.split(":")[0] for ch in c.get("chars", [])])
+    for w in names:
+        li = look_info(work, w, (c.get("looks") or {}).get(w))
         if li and li.get("prompt_en"):
             out[w] = (li["prompt_en"], bool(li.get("pick")))
     return out
@@ -1083,6 +1088,9 @@ elif cur == "cast":
                 g_prompt, g_refs, g_style = prompt, None, {"cast": "ref", "prop": "prop"}.get(kind, "location")
                 if kind == "cast" and info.get("_face"):            # 분장·의상(룩): 확정 얼굴을 기준 그림으로 넣고 머리·분장·옷만 바꾼다
                     g_prompt, g_refs, g_style = imagegen.LOOK_SAME + prompt, [("face.jpg", img_bytes(info["_face"]))], "sheet"
+                    if info.get("_body"):                           # 마스터 전신도 함께: 옷을 바꿔도 체형은 그대로
+                        g_prompt = imagegen.LOOK_BODY + g_prompt
+                        g_refs.append(("body.jpg", img_bytes(info["_body"])))
                 if kind == "loc" and info.get("dressing_en") and not info.get("_master") and info["dressing_en"] not in g_prompt:
                     g_prompt = g_prompt + " Set dressing: " + info["dressing_en"]   # 미술 설계의 세트 드레싱
                 if kind == "loc" and info.get("_master"):           # 장소 시점: 마스터를 기준 그림으로 넣어 같은 방을 다른 쪽에서
@@ -1166,8 +1174,11 @@ elif cur == "cast":
                 make_views(need)
                 s.update(label="시트 생성 완료", state="complete")
             st.rerun()
-        cols = st.columns(4)
-        for i, (v, lab) in enumerate([("front", "정면 (확정)")] + [(k, imagegen.VIEWS[k][0]) for k in imagegen.VIEWS]):
+        _slots = [("front", "정면 (확정)")] + [(k, imagegen.VIEWS[k][0]) for k in imagegen.VIEWS]
+        if work.get("master_mode") and "__" not in c:     # 캐릭터 마스터: 헤드샷 칸 추가, 3/4 칸은 측면도 받음
+            _slots = [("front", "상반신 정면 (확정)"), ("head", "헤드샷")] + [(k, "측면·3/4" if k == "side" else imagegen.VIEWS[k][0]) for k in imagegen.VIEWS]
+        cols = st.columns(len(_slots))
+        for i, (v, lab) in enumerate(_slots):
             with cols[i]:
                 st.caption(lab)
                 if sh.get(v):
@@ -1176,7 +1187,7 @@ elif cur == "cast":
                         st.image(d, width="stretch")
                 if v == "front":
                     continue
-                if sh.get(v) and st.button("다시", key=f"shr_{c}_{v}", disabled=not KEYS.get("OPENAI_API_KEY")):
+                if v in imagegen.VIEWS and sh.get(v) and st.button("다시", key=f"shr_{c}_{v}", disabled=not KEYS.get("OPENAI_API_KEY")):
                     with st.spinner(f"{c} {lab} 다시 만드는 중…"):
                         make_views([v])
                     st.rerun()
@@ -1224,8 +1235,12 @@ elif cur == "cast":
                         f"<div class='s'>{li.get('note', '')}</div></div>", unsafe_allow_html=True)
             if st.toggle("이 룩 열기", key=f"lk_open_{c}_{name}", value=not li.get("pick")):
                 li["_face"] = info["pick"]
+                _full = sheet_of(info).get("full")
+                if _full:
+                    li["_body"] = _full
                 asset_board("cast", f"{c}__{name}", f"{c} · {name}", li, "3:4", 2)
                 li.pop("_face", None)
+                li.pop("_body", None)
                 if li.get("pick"):
                     sheet_board(f"{c}__{name}", li)
                 if st.button("이 룩 삭제", key=f"lk_del_{c}_{name}"):
@@ -1360,6 +1375,17 @@ elif cur == "cast":
             work["lead"] = _lead
             save(work)
             st.rerun()
+        if "master_mode" not in work:                # 새 작품은 캐릭터 마스터(기본복) 방식, 이미 확정한 작품은 예전 방식
+            work["master_mode"] = not any(v.get("pick") for v in work.get("cast", {}).values())
+            save(work)
+        _mm = st.toggle("캐릭터 마스터 방식 (기본복 마스터 + 화마다 룩)", value=work["master_mode"], key="master_mode_t",
+                        help="인물 기준 그림은 몸과 얼굴만 고정(기본복: 민소매·반바지)하고, 평소 차림을 포함한 모든 옷은 의상 설계의 룩으로 입힙니다.")
+        if _mm != work["master_mode"]:
+            work["master_mode"] = _mm
+            if work.get("design"):
+                design.register(work, work["design"], cuts=False)
+            save(work)
+            st.rerun()
         main_n = st.slider("기준 이미지를 만들 인물 수 (주인공부터)", 1, max(1, len(chars_all)), min(work.get("main_n", 6), max(1, len(chars_all))))
         if main_n != work.get("main_n"):
             work["main_n"] = main_n
@@ -1410,19 +1436,32 @@ elif cur == "cast":
                                 "② 시트(3/4·전신·뒷모습)도 ChatGPT에서 만들려면, 정면 그림을 첨부하고 각 지시문을 붙여 넣은 뒤 캐스팅 시트 칸에 올리세요."
                                 + ("" if info.get("design_base") else " 의상 설계를 먼저 하면 옷이 설계의 기본 룩으로 들어갑니다.") + "</div>", unsafe_allow_html=True)
                     _pe = info.get("prompt_en") or ""
+                    if work.get("master_mode") and _pe:
+                        _sex = "m" if re.search(r"\b(man|male|boy|gentleman)\b", _pe, re.I) and not re.search(r"\b(woman|female|girl)\b", _pe, re.I) else "f"
+                        _mp = _pe + f" Wardrobe for this character master: {imagegen.MASTER_WEAR[_sex]}, replacing any clothing described above. No accessories."
+                        st.markdown("<div class='small'>캐릭터 마스터: 몸과 얼굴만 고정하는 기본복 그림입니다. 아래 5장을 만들어, 상반신 정면은 ‘직접 올리기’에, "
+                                    "나머지는 캐스팅 시트 칸(헤드샷·전신·측면·뒷모습)에 올리세요. 옷은 의상 설계의 룩으로 화마다 입힙니다.</div>", unsafe_allow_html=True)
+                        for slot, lab, asp, txt in imagegen.MASTER_VIEWS:
+                            st.markdown(f"**{lab} ({asp})**" + ("" if slot == "front" else " · 상반신 정면 그림을 첨부하고"))
+                            if slot == "front":
+                                st.code(imagegen.clean_banned(imagegen.chatgpt_prompt(_mp + " " + txt, "ref", asp)), language=None, wrap_lines=True)
+                            else:
+                                st.code(f"Using the attached image as the same person (identical face, hair, body and clothing), create one photorealistic image, "
+                                        f"vertical {asp} aspect ratio, plain warm beige seamless studio background. " + txt, language=None, wrap_lines=True)
+                        _pe = ""
                     if info.get("design_base") and info.get("design_base") not in _pe:
                         _base_en = next((x.get("desc_en", "") for x in (work.get("design") or {}).get("costume", [])
                                          if x["who"] == c and x["look"] == "기본" and x.get("desc_en")), "")
                         if _base_en:
                             _pe = (_pe + " Wardrobe for this portrait — " + _base_en).strip()
-                    if _pe:
+                    if _pe and not work.get("master_mode"):
                         st.markdown("**정면 (3:4)**")
                         st.code(imagegen.clean_banned(imagegen.chatgpt_prompt(_pe, "ref", "3:4")), language=None, wrap_lines=True)
                         for v, (lab, asp, txt) in imagegen.VIEWS.items():
                             st.markdown(f"**{lab} ({asp})** · 정면 그림을 첨부하고")
                             st.code(f"Using the attached image, create one photorealistic image, vertical {asp} aspect ratio. " + txt,
                                     language=None, wrap_lines=True)
-                    else:
+                    elif not info.get("prompt_en"):
                         st.caption("지시문이 아직 없습니다. ‘프로필 초안 만들기’를 먼저 누르세요.")
                 asset_board("cast", c, c, info, "3:4", 4)
                 if info.get("pick"):
@@ -1915,6 +1954,10 @@ elif cur == "still":
                 out.append((f"{base}@정면", sh["front"]))
             elif v == "front" and sh.get("full"):     # 얼굴(정면)만 붙이면 체형이 컷마다 달라짐 → 전신도 함께 (3 DAYS 규칙)
                 out.append((f"{base}@전신", sh["full"]))
+            _m = work.get("cast", {}).get(base, {})
+            _head = sheet_of(_m).get("head")
+            if _head and c.get("size") in ("ECU", "CU", "MCU"):   # 클로즈업: 마스터 헤드샷으로 얼굴 고정
+                out.append((f"{base}@얼굴", _head))
         k = work.get("loc", {}).get(c["loc"], {}).get("pick")
         vk = work.get("loc", {}).get(c["loc"], {}).get("views", {}).get(c.get("view") or "", {}).get("pick")
         if vk:                                        # 시점 그림이 이 컷의 배경, 마스터는 전경 참고

@@ -81,6 +81,18 @@ LOC_VIEW = ("The same room as the reference image: identical architecture, mater
 LOOK_SAME = ("The same person as the reference image: identical face, identical age, identical body. "
              "The hair, make-up and clothing of the reference are replaced by the look described here. "
              "Front view, vertical framing from the top of the head to the upper hips, neutral relaxed expression. Look: ")
+# 캐릭터 마스터(기본복) 방식 — 3 DAYS 규칙: 마스터는 몸과 얼굴만 고정, 옷은 룩으로 그때그때 입힌다.
+MASTER_WEAR = {"f": "a plain light beige cotton sleeveless tank top and plain light beige cotton shorts, barefoot",
+               "m": "a plain light grey cotton sleeveless top and plain light grey cotton shorts, barefoot"}
+LOOK_BODY = ("The second reference image shows the same person full body: keep that exact body shape and proportions; "
+             "its clothing is not used. ")
+MASTER_VIEWS = [  # (슬롯, 이름, 비율, ChatGPT 문장)
+    ("front", "상반신 정면", "3:4", "Front view, eye-level camera, vertical framing from the top of the head to the upper hips, arms relaxed at the sides, neutral relaxed expression."),
+    ("head", "헤드샷", "3:4", "Close-up headshot from the top of the head to the collarbones, facing the camera directly, neutral relaxed expression."),
+    ("full", "전신 정면", "9:16", "Full-body front view from the top of the head to the bare feet, standing straight, arms relaxed at the sides, space above the head and below the feet."),
+    ("side", "측면", "9:16", "Full-body side profile facing the left edge of the frame: head, shoulders, chest and hips all turned together 90 degrees, no twist at the neck, standing straight."),
+    ("back", "뒷모습", "9:16", "Full-body back view from directly behind, the back of the hair clearly visible, the face not visible."),
+]
 VIEWS = {
     "side": ("3/4", "3:4", SAME + "Three-quarter view: head, shoulders, chest and hips all turned together 45 degrees to the camera's left, "
              "no twist at the neck, eyes looking past the camera. Vertical framing from the top of the head to the upper hips."),

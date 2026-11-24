@@ -321,6 +321,12 @@ def register(work: dict, d: dict, frozen: tuple = ("1",), cuts: bool = True) -> 
             continue
         if c["look"] == "기본":
             cast[c["who"]]["design_base"] = look_note(c)
+            if work.get("master_mode") and c.get("desc_en"):   # 마스터(기본복) 방식: 평소 차림도 룩으로 입힌다
+                lk = cast[c["who"]].setdefault("looks", {})
+                if "기본 룩" not in lk:
+                    lk["기본 룩"] = {"prompt_en": c["desc_en"], "note": look_note(c)}
+                    notes.append(f"{c['who']} · 기본 룩")
+                cast[c["who"]]["default_look"] = "기본 룩"
             continue
         if not look_usable(c, d):          # 추론 룩은 감독님 확인 뒤에 등록
             continue

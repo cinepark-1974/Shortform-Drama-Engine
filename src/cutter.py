@@ -846,6 +846,8 @@ def still_prompt(c: dict, cast: dict, locs: dict, refs: list[str] | None = None,
             tag = desc + (f", {lt[0].rstrip('. ')}" if lt else "")
         if f"{base}@정면" in pos:
             tag += f" (reference image {pos[base + '@정면']} shows the same person from the front)"
+        if f"{base}@얼굴" in pos:
+            tag += f" (reference image {pos[base + '@얼굴']} is a close headshot of the same person: use it for facial features only)"
         if f"{base}@전신" in pos:
             tag += (f" (reference image {pos[base + '@전신']} shows the same person full body: keep this body shape and proportions"
                     + ("; its clothing is not used" if lt and not lt[1] else "") + ")")
