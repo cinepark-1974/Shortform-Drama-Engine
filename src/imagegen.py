@@ -98,6 +98,23 @@ BANNED = [("살짝", "확정 표현으로"), ("약간", "확정 표현으로"), 
           ("looks like", "definite wording"), ("might", "definite wording")]
 
 
+_AUTO_FIX = [(r"\b(slightly|somewhat|a bit|a little|maybe|perhaps|possibly)\s+", ""), (r"\s+(slightly|somewhat)\b", "")]
+
+
+def clean_banned(text: str) -> str:
+    """AI 가 쓴 영어 지시문에서 흐린 수식어(slightly, maybe …)를 지운다. ' or ' 처럼 뜻이 바뀌는 것은 그대로 두고 경고만."""
+    for pat, to in _AUTO_FIX:
+        text = re.sub(pat, to, text, flags=re.I)
+    return text
+
+
+def chatgpt_prompt(prompt: str, style: str = "ref", aspect: str = "3:4") -> str:
+    """ChatGPT(이미지 생성)에 그대로 붙여 넣을 전체 지시문: 엔진이 쓰는 머리·꼬리 문장 + 인물 문장 + 비율."""
+    head, tail = STYLES.get(style, STYLES["ref"])
+    body = soften(prompt) if style in ("ref", "sheet") else prompt
+    return f"Create one photorealistic image, vertical {aspect} aspect ratio. " + head + body + tail
+
+
 def banned_in(text: str) -> list[str]:
     t = f" {text} "
     return [f"'{w.strip()}' → {why}" for w, why in BANNED if w in t]

@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, design, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.8.8"
+VERSION = "v1.9.3"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -253,8 +253,13 @@ def chars_ranked(work: dict) -> list[str]:
     if not b:
         return []
     n = bb.stats(b, work["parsed"])["lines"]
-    names = [c["name"] for c in b["characters"]]
-    return sorted(names, key=lambda x: -n.get(x, 0))
+    chars = b["characters"]
+    # 주인공 먼저 (role 에 '주인공'), 그다음 작품 정리의 순서(이야기 비중), 단역은 뒤로. 대사 수는 같은 묶음 안에서만.
+    def rank(i_c):
+        i, c = i_c
+        role = c.get("role", "")
+        return (0 if c["name"] == work.get("lead") or (not work.get("lead") and "주인공" in role) else 2 if re.search(r"단역|행인|직원 \d|경찰|교도관", role + c["name"]) else 1, i, -n.get(c["name"], 0))
+    return [c["name"] for _, c in sorted(enumerate(chars), key=rank)]
 
 
 def locs_ranked(work: dict) -> list[dict]:
@@ -1104,8 +1109,11 @@ elif cur == "cast":
             k = f"{base}/up_{uuid.uuid4().hex[:6]}.jpg"
             store.put_bytes(k, buf.getvalue(), "image/jpeg")
             info.setdefault("cands", []).append(k)
+            if not info.get("pick"):                 # 직접 올린 그림은 확정이 없을 때 바로 확정 (ChatGPT에서 만든 주인공 등)
+                info["pick"] = k
             st.session_state[f"done_{upf.file_id}"] = True
             save(work)
+            st.rerun()
         cands = info.get("cands", [])
         if cands:
             cols = st.columns(4)
@@ -1341,7 +1349,18 @@ elif cur == "cast":
                                file_name=f"{work.get('title', 'work')[:20]}_의상분장미술.csv", mime="text/csv", key="design_csv")
 
     with t_char:
-        main_n = st.slider("기준 이미지를 만들 인물 수 (대사 많은 순)", 1, max(1, len(chars_all)), min(work.get("main_n", 6), max(1, len(chars_all))))
+        if not work.get("design"):
+            st.info("순서: 먼저 ‘의상·분장·미술 설계’ 탭에서 설계를 하면, 아래 인물 지시문이 그 설계의 기본 룩 차림으로 써집니다. "
+                    "주인공은 ChatGPT에서 직접 만들어 올려도 됩니다(각 인물 칸의 ‘ChatGPT에서 직접 만들기’).")
+        _lead_opts = [c["name"] for c in B["characters"]]
+        _lead_now = chars_all[0] if chars_all else ""
+        _lead = st.selectbox("주인공", _lead_opts, index=_lead_opts.index(_lead_now) if _lead_now in _lead_opts else 0, key="lead_pick",
+                             help="주인공이 맨 위에 옵니다. 작품 정리가 주인공을 잘못 잡았을 때만 바꾸면 됩니다.")
+        if _lead != work.get("lead") and _lead != _lead_now:
+            work["lead"] = _lead
+            save(work)
+            st.rerun()
+        main_n = st.slider("기준 이미지를 만들 인물 수 (주인공부터)", 1, max(1, len(chars_all)), min(work.get("main_n", 6), max(1, len(chars_all))))
         if main_n != work.get("main_n"):
             work["main_n"] = main_n
             save(work)
@@ -1355,6 +1374,8 @@ elif cur == "cast":
                 nm = alias.get(str(c.get("name", "")).replace(" ", ""), c.get("name"))   # '세영' → '한세영'
                 if nm in chars:
                     c["name"] = nm
+                    if c.get("prompt_en"):
+                        c["prompt_en"] = imagegen.clean_banned(c["prompt_en"])
                     work.setdefault("cast", {}).setdefault(nm, {}).update(c)
                     st.session_state.pop(f"p_cast_{nm}", None)   # 비어 있던 입력칸 기억을 지워야 새 지시문이 보임
             save(work)
@@ -1374,10 +1395,35 @@ elif cur == "cast":
                     got = next((x for x in d.get("characters", []) if x.get("prompt_en")), None)
                     if got:
                         got["name"] = c
+                        got["prompt_en"] = imagegen.clean_banned(got["prompt_en"])
                         info.update(got)
                         save(work)
                         st.rerun()
                     st.error("다시 잡기에 실패했습니다. 한 번 더 눌러 주세요.")
+                if not info.get("pick"):
+                    if not info.get("prompt_en"):
+                        st.warning("이미지 지시문이 비어 있어 ‘후보 만들기’가 꺼져 있습니다. 위의 ‘프로필 초안 만들기’를 누르거나, ChatGPT에서 만든 그림을 바로 올리세요.")
+                    elif imagegen.banned_in(info["prompt_en"]):
+                        st.warning("지시문에 금지어가 있어 ‘후보 만들기’가 꺼져 있습니다. 아래 지시문에서 그 낱말을 지우면 켜집니다.")
+                with st.expander("ChatGPT에서 직접 만들기 (토큰 절약) · 붙여 넣을 지시문", expanded=False):
+                    st.markdown("<div class='small'>① 정면 지시문을 ChatGPT에 붙여 넣어 만들고, 마음에 드는 1장을 아래 ‘직접 올리기’에 올리면 바로 확정됩니다. "
+                                "② 시트(3/4·전신·뒷모습)도 ChatGPT에서 만들려면, 정면 그림을 첨부하고 각 지시문을 붙여 넣은 뒤 캐스팅 시트 칸에 올리세요."
+                                + ("" if info.get("design_base") else " 의상 설계를 먼저 하면 옷이 설계의 기본 룩으로 들어갑니다.") + "</div>", unsafe_allow_html=True)
+                    _pe = info.get("prompt_en") or ""
+                    if info.get("design_base") and info.get("design_base") not in _pe:
+                        _base_en = next((x.get("desc_en", "") for x in (work.get("design") or {}).get("costume", [])
+                                         if x["who"] == c and x["look"] == "기본" and x.get("desc_en")), "")
+                        if _base_en:
+                            _pe = (_pe + " Wardrobe for this portrait — " + _base_en).strip()
+                    if _pe:
+                        st.markdown("**정면 (3:4)**")
+                        st.code(imagegen.clean_banned(imagegen.chatgpt_prompt(_pe, "ref", "3:4")), language=None, wrap_lines=True)
+                        for v, (lab, asp, txt) in imagegen.VIEWS.items():
+                            st.markdown(f"**{lab} ({asp})** · 정면 그림을 첨부하고")
+                            st.code(f"Using the attached image, create one photorealistic image, vertical {asp} aspect ratio. " + txt,
+                                    language=None, wrap_lines=True)
+                    else:
+                        st.caption("지시문이 아직 없습니다. ‘프로필 초안 만들기’를 먼저 누르세요.")
                 asset_board("cast", c, c, info, "3:4", 4)
                 if info.get("pick"):
                     sheet_board(c, info)
