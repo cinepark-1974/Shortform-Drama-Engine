@@ -93,6 +93,29 @@ MASTER_VIEWS = [  # (슬롯, 이름, 비율, ChatGPT 문장)
     ("side", "측면", "9:16", "Full-body side profile facing the left edge of the frame: head, shoulders, chest and hips all turned together 90 degrees, no twist at the neck, standing straight."),
     ("back", "뒷모습", "9:16", "Full-body back view from directly behind, the back of the hair clearly visible, the face not visible."),
 ]
+def sex_of(prompt: str) -> str:
+    return "m" if re.search(r"\b(man|male|boy|gentleman)\b", prompt, re.I) and not re.search(r"\b(woman|female|girl|lady)\b", prompt, re.I) else "f"
+
+
+def master_prompt(prompt: str) -> str:
+    """캐릭터 마스터(기본복) 지시문: 인물 문장의 옷을 기본복으로 바꾸고 장신구를 뺀다 (몸과 얼굴만 고정)."""
+    if "character master" in prompt:
+        return prompt
+    return (prompt.rstrip(". ") + f". Wardrobe for this character master: {MASTER_WEAR[sex_of(prompt)]}, replacing any clothing, "
+            "shoes and accessories described above. No jewelry, no glasses, no hair accessories.")
+
+
+MASTER_SAME = ("The same person as the reference image: identical face, hairstyle, bangs, hair color, body and the same plain "
+               "sleeveless top and shorts, barefoot. Neutral relaxed expression. ")
+MASTER_GEN = {   # 엔진이 마스터 시트를 만들 때 (상반신 정면 = 확정 그림을 기준으로)
+    "head": ("헤드샷", "3:4", MASTER_SAME + "Close-up headshot from the top of the head to the collarbones, facing the camera directly."),
+    "side": ("측면", "9:16", MASTER_SAME + "Full-body side profile facing the left edge of the frame: head, shoulders, chest and hips all "
+             "turned together 90 degrees, no twist at the neck, standing straight, space above the head and below the feet."),
+    "full": ("전신", "9:16", MASTER_SAME + "Full-body front view from the top of the head to the bare feet, standing straight, arms relaxed "
+             "at the sides, space above the head and below the feet."),
+    "back": ("뒷모습", "9:16", MASTER_SAME + "Full-body back view from directly behind, the back of the hairstyle clearly visible, "
+             "the face not visible, space above the head and below the feet."),
+}
 VIEWS = {
     "side": ("3/4", "3:4", SAME + "Three-quarter view: head, shoulders, chest and hips all turned together 45 degrees to the camera's left, "
              "no twist at the neck, eyes looking past the camera. Vertical framing from the top of the head to the upper hips."),

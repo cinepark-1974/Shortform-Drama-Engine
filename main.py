@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, design, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.9.4"
+VERSION = "v1.9.5"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -1086,6 +1086,8 @@ elif cur == "cast":
         if go:
             with st.status(f"{label} 후보 {n_cand}장 생성 중… (장당 30초~1분)") as s:
                 g_prompt, g_refs, g_style = prompt, None, {"cast": "ref", "prop": "prop"}.get(kind, "location")
+                if kind == "cast" and work.get("master_mode") and not info.get("_face") and "__" not in key:
+                    g_prompt = imagegen.master_prompt(prompt)          # 캐릭터 마스터: 기본복으로 몸과 얼굴만
                 if kind == "cast" and info.get("_face"):            # 분장·의상(룩): 확정 얼굴을 기준 그림으로 넣고 머리·분장·옷만 바꾼다
                     g_prompt, g_refs, g_style = imagegen.LOOK_SAME + prompt, [("face.jpg", img_bytes(info["_face"]))], "sheet"
                     if info.get("_body"):                           # 마스터 전신도 함께: 옷을 바꿔도 체형은 그대로
@@ -1142,7 +1144,9 @@ elif cur == "cast":
         stale = bool(info.get("views")) and info.get("views_of") != info["pick"]
         st.markdown(f"**캐스팅 시트** <span class='small'>정면을 바꾸면 시트를 다시 만들어야 합니다. 뒷모습 컷·측면 컷·전신 컷의 기준 그림으로 씁니다.</span>"
                     + (" <span class='tag fix'>정면이 바뀜 · 다시 만들기 필요</span>" if stale else ""), unsafe_allow_html=True)
-        need = [v for v in imagegen.VIEWS if v not in sh]
+        _master = work.get("master_mode") and "__" not in c        # 캐릭터 마스터 시트 (룩 시트는 예전 방식)
+        _gen = imagegen.MASTER_GEN if _master else imagegen.VIEWS
+        need = [v for v in _gen if v not in sh]
         base = f"works/{work['id']}/cast/{slug(c)}"
 
         def make_views(views):
@@ -1151,6 +1155,9 @@ elif cur == "cast":
 
             def one(v):
                 try:
+                    if _master:
+                        return imagegen.edit(KEYS["OPENAI_API_KEY"], _gen[v][2] + " " + imagegen.master_prompt(desc), [("front.jpg", front)],
+                                             _gen[v][1], quality, style="sheet", model=KEYS.get("IMAGE_MODEL", ""))
                     return imagegen.edit(KEYS["OPENAI_API_KEY"], imagegen.VIEWS[v][2] + " " + desc, [("front.jpg", front)],
                                          imagegen.VIEWS[v][1], quality, style="sheet", model=KEYS.get("IMAGE_MODEL", ""))
                 except Exception as ex:
@@ -1161,14 +1168,14 @@ elif cur == "cast":
                 info["views"], info["views_of"] = {}, info["pick"]
             for v, r in zip(views, res):
                 if isinstance(r, Exception):
-                    st.error(f"{c} {imagegen.VIEWS[v][0]}: {r}")
+                    st.error(f"{c} {_gen[v][0]}: {r}")
                     continue
                 k = f"{base}/sheet_{v}_{uuid.uuid4().hex[:6]}.jpg"
                 store.put_bytes(k, r, "image/jpeg")
                 info["views"][v] = k
             save(work)
 
-        if need and st.button(f"시트 {len(need)}장 만들기 ({', '.join(imagegen.VIEWS[v][0] for v in need)})", key=f"sh_{c}",
+        if need and st.button(f"시트 {len(need)}장 만들기 ({', '.join(_gen[v][0] for v in need)})", key=f"sh_{c}",
                               type="primary", disabled=not KEYS.get("OPENAI_API_KEY")):
             with st.status(f"{c} 캐스팅 시트 {len(need)}장 생성 중… (1~2분)") as s:
                 make_views(need)
@@ -1187,7 +1194,7 @@ elif cur == "cast":
                         st.image(d, width="stretch")
                 if v == "front":
                     continue
-                if v in imagegen.VIEWS and sh.get(v) and st.button("다시", key=f"shr_{c}_{v}", disabled=not KEYS.get("OPENAI_API_KEY")):
+                if v in _gen and sh.get(v) and st.button("다시", key=f"shr_{c}_{v}", disabled=not KEYS.get("OPENAI_API_KEY")):
                     with st.spinner(f"{c} {lab} 다시 만드는 중…"):
                         make_views([v])
                     st.rerun()
