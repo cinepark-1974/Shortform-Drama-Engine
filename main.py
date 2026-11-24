@@ -19,7 +19,7 @@ from src import videogen, bible as bb
 from src import cutter, design, dubbing, editor, imagegen, lipcheck, profiles, qc, script_parser, sound
 from src.store import Store, secrets_dict
 
-VERSION = "v1.9.8"
+VERSION = "v1.9.9"
 st.set_page_config(page_title="숏폼드라마 엔진", page_icon="🎬", layout="wide")
 
 # ───────── 화면 색: 밝은 푸른 바탕, 포인트 #191970 · #FFCB05, Paperlogy, 그림자·그라데이션 없음 ─────────
@@ -1094,7 +1094,7 @@ elif cur == "cast":
         if go:
             with st.status(f"{label} 후보 {n_cand}장 생성 중… (장당 30초~1분)") as s:
                 g_prompt, g_refs, g_style = prompt, None, {"cast": "ref", "prop": "prop"}.get(kind, "location")
-                if kind == "cast" and work.get("master_mode") and not info.get("_face") and "__" not in key:
+                if kind == "cast" and work.get("master_mode") and not info.get("_face") and "__" not in key and not info.get("extra"):
                     g_prompt = imagegen.master_prompt(prompt)          # 캐릭터 마스터: 기본복으로 몸과 얼굴만
                 if kind == "cast" and info.get("_face"):            # 분장·의상(룩): 확정 얼굴을 기준 그림으로 넣고 머리·분장·옷만 바꾼다
                     g_prompt, g_refs, g_style = imagegen.LOOK_SAME + prompt, [("face.jpg", img_bytes(info["_face"]))], "sheet"
@@ -1152,7 +1152,7 @@ elif cur == "cast":
         stale = bool(info.get("views")) and info.get("views_of") != info["pick"]
         st.markdown(f"**캐스팅 시트** <span class='small'>정면을 바꾸면 시트를 다시 만들어야 합니다. 뒷모습 컷·측면 컷·전신 컷의 기준 그림으로 씁니다.</span>"
                     + (" <span class='tag fix'>정면이 바뀜 · 다시 만들기 필요</span>" if stale else ""), unsafe_allow_html=True)
-        _master = work.get("master_mode") and "__" not in c        # 캐릭터 마스터 시트 (룩 시트는 예전 방식)
+        _master = work.get("master_mode") and "__" not in c and not info.get("extra")   # 캐릭터 마스터 시트 (룩·단역은 예전 방식)
         _gen = imagegen.MASTER_GEN if _master else imagegen.VIEWS
         need = [v for v in _gen if v not in sh]
         base = f"works/{work['id']}/cast/{slug(c)}"
@@ -1477,6 +1477,20 @@ elif cur == "cast":
             work["main_n"] = main_n
             save(work)
         chars = chars_all[:main_n]
+        _roles = {r["name"]: r for r in B["characters"]}
+        for _nm, _r in _roles.items():                 # 단역(경찰·교도관 등)은 마스터 기본복이 아니라 제 옷 그대로 캐스팅
+            if re.search(r"단역|행인|경찰|교도관|형사|의사|간호사|기사|직원", _r.get("role", "") + _nm) and not work.get("cast", {}).get(_nm, {}).get("extra"):
+                work.setdefault("cast", {}).setdefault(_nm, {})["extra"] = True
+                save(work)
+        for _x in (work.get("design") or {}).get("extras", []):      # 단역: 의상 설계의 단역 의상으로 지시문을 바로 채움
+            _nm = _x.get("who")
+            if _nm in _roles and _x.get("desc_en") and not work.get("cast", {}).get(_nm, {}).get("prompt_en"):
+                _ci = work.setdefault("cast", {}).setdefault(_nm, {})
+                _ci["prompt_en"] = imagegen.clean_banned("A Korean adult man in his thirties with an ordinary natural face, a supporting extra. "
+                                                         + _x["desc_en"])
+                _ci["extra"] = True
+                st.session_state.pop(f"p_cast_{_nm}", None)
+                save(work)
         need = [c for c in chars if not work.get("cast", {}).get(c, {}).get("prompt_en")]
         if need and st.button(f"프로필 초안 만들기 ({len(need)}명, Claude)", disabled=not KEYS.get("ANTHROPIC_API_KEY")):
             with st.spinner("대본에서 나이·직업·처지를 읽는 중…"):
@@ -1491,6 +1505,17 @@ elif cur == "cast":
                     work.setdefault("cast", {}).setdefault(nm, {}).update(c)
                     st.session_state.pop(f"p_cast_{nm}", None)   # 비어 있던 입력칸 기억을 지워야 새 지시문이 보임
             save(work)
+            _miss = [c for c in need if not work.get("cast", {}).get(c, {}).get("prompt_en")]
+            if _miss:                                  # 초안이 빠뜨린 인물(단역 등)은 한 명씩 다시 요청
+                for _c in _miss:
+                    _d1 = profiles.draft(KEYS["ANTHROPIC_API_KEY"], parsed, [_c], {}, MODEL, B_cast())
+                    _got = next((x for x in _d1.get("characters", []) if x.get("prompt_en")), None)
+                    if _got:
+                        _got["name"] = _c
+                        _got["prompt_en"] = imagegen.clean_banned(_got["prompt_en"])
+                        work.setdefault("cast", {}).setdefault(_c, {}).update(_got)
+                        st.session_state.pop(f"p_cast_{_c}", None)
+                save(work)
             st.rerun()
         roles = {c["name"]: c for c in B["characters"]}
         for c in chars:
@@ -1522,7 +1547,7 @@ elif cur == "cast":
                                 "② 시트(3/4·전신·뒷모습)도 ChatGPT에서 만들려면, 정면 그림을 첨부하고 각 지시문을 붙여 넣은 뒤 캐스팅 시트 칸에 올리세요."
                                 + ("" if info.get("design_base") else " 의상 설계를 먼저 하면 옷이 설계의 기본 룩으로 들어갑니다.") + "</div>", unsafe_allow_html=True)
                     _pe = info.get("prompt_en") or ""
-                    if work.get("master_mode") and _pe:
+                    if work.get("master_mode") and _pe and not info.get("extra"):
                         _sex = "m" if re.search(r"\b(man|male|boy|gentleman)\b", _pe, re.I) and not re.search(r"\b(woman|female|girl)\b", _pe, re.I) else "f"
                         _mp = _pe + f" Wardrobe for this character master: {imagegen.MASTER_WEAR[_sex]}, replacing any clothing described above. No accessories."
                         st.markdown("<div class='small'>캐릭터 마스터: 몸과 얼굴만 고정하는 기본복 그림입니다. 아래 5장을 만들어, 상반신 정면은 ‘직접 올리기’에, "
